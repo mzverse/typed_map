@@ -1,9 +1,48 @@
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::borrow::Borrow;
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
-use std::hash::{BuildHasher, Hash, Hasher, RandomState};
-use std::marker::PhantomData;
+use std::ffi::c_void;
+use std::hash::{BuildHasher, Hash, Hasher};
+use std::marker::{PhantomData};
+
+
+pub trait Map<K, V, Q>
+{
+    fn insert(&mut self, key: K, value: V) -> Option<V>;
+    fn get(&self, key: &Q) -> Option<&V>;
+}
+impl<K, V, Q, S> Map<K, V, Q> for HashMap<K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher,
+    K: Borrow<Q>,
+    Q: Eq + Hash,
+{
+    fn insert(&mut self, key: K, value: V) -> Option<V> {
+        HashMap::insert(self, key, value)
+    }
+
+    fn get(&self, key: &Q) -> Option<&V> {
+         HashMap::get(self, key)
+    }
+}
+impl<K, V, Q> Map<K, V, Q> for BTreeMap<K, V>
+where
+    K: Ord,
+    K: Borrow<Q>,
+    Q: Ord,
+{
+    fn insert(&mut self, key: K, value: V) -> Option<V> {
+        BTreeMap::insert(self, key, value)
+    }
+
+    fn get(&self, key: &Q) -> Option<&V> {
+        BTreeMap::get(self, key)
+    }
+}
+
 
 pub trait MapType {
     type Key<T>;
@@ -16,86 +55,111 @@ pub trait TypedMapSpecialized<Type: MapType, T> {
 }
 
 
-enum Key<'a, T, H: Hasher> {
-    KeyBox(Box<dyn Any>, fn(&dyn Any, &mut H), fn(&dyn Any, &dyn Any) -> bool),
-    KeyBorrow(&'a T),
+enum Key<'a, T> {
+    Borrow(&'a T),
+    Hash(Box<dyn Any>, fn(&dyn Any, *mut c_void), fn(&dyn Any, &dyn Any) -> bool),
+    Ord(Box<dyn Any>, fn(&dyn Any, &dyn Any) -> Ordering),
 }
 
 type Never = Infallible;
 
-struct KeyStore<H: Hasher>(Key<'static, Never, H>);
-impl<'a, T, H: Hasher> Borrow<Key<'a, T, H>> for KeyStore<H> {
-    fn borrow(&self) -> &Key<'a, T, H> {
+pub struct KeyStore(Key<'static, Never>);
+impl<'a, T> Borrow<Key<'a, T>> for KeyStore {
+    fn borrow(&self) -> &Key<'a, T> {
         unsafe {
-            std::mem::transmute::<&Key<'static, Never, H>, &Key<'a, T, H>>(&self.0)
+            std::mem::transmute::<&Key<'static, Never>, &Key<'a, T>>(&self.0)
         }
     }
 }
 
-impl<T: Hash, H: Hasher> Hash for Key<'_, T, H> {
+impl<T: Hash> Hash for Key<'_, T> {
     fn hash<H1: Hasher>(&self, state: &mut H1) {
-        // assert_eq!(TypeId::of::<H1>(), TypeId::of::<H>());
         use Key::*;
         match self {
-            KeyBox(b, f, _) => f(&**b, unsafe {
-                std::mem::transmute::<&mut H1, &mut H>(state)
-            }),
-            KeyBorrow(b) => b.hash(state)
+            Hash(b, f, _) => f(&**b, state as *mut H1 as *mut c_void),
+            Borrow(b) => b.hash(state),
+            Ord(..) => panic!()
         }
     }
 }
 
-impl<T: Eq + 'static, H: Hasher> PartialEq<Self> for Key<'_, T, H> {
+impl<T: Eq + 'static> PartialEq<Self> for Key<'_, T> {
     fn eq(&self, other: &Self) -> bool {
         use Key::*;
         match self {
-            KeyBox(b, _, f) => match other {
-                KeyBox(b1, _, _) => f(b, b1),
-                KeyBorrow(b1) => match b.downcast_ref::<T>() {
-                    Some(b) => (*b1).eq(b),
-                    None => false,
-                }
+            Hash(b, _, f) => match other {
+                Hash(b1, ..) => f(&**b, &**b1),
+                Ord(..) => panic!(),
+                Borrow(_) => other.eq(self)
             },
-            KeyBorrow(b) => match other {
-                KeyBox(b1, _, _) => match b1.downcast_ref::<T>() {
+            Ord(..) => panic!(),
+            Borrow(b) => match other {
+                Hash(b1, ..) => match b1.downcast_ref::<T>() {
                     Some(b1) => (*b).eq(b1),
                     None => false,
                 },
-                KeyBorrow(b1) => (*b).eq(b1)
+                Ord(..) => panic!(),
+                Borrow(b1) => (*b).eq(b1)
             }
         }
     }
 }
-impl<T: Eq + 'static, H: Hasher> Eq for Key<'_, T, H> {
+impl<T: Eq + 'static> Eq for Key<'_, T> {
 }
 
-impl<H: Hasher> Hash for KeyStore<H> {
+impl<T: Ord + 'static> PartialOrd<Self> for Key<'_, T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl<T: Ord + 'static> Ord for Key<'_, T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        use Key::*;
+        match self {
+            Hash(..) => panic!(),
+            Ord(b, f) => match other {
+                Hash(..) => panic!(),
+                Ord(b1, ..) => f(&**b, &**b1),
+                Borrow(_) => other.cmp(self).reverse()
+            },
+            Borrow(b) => match other {
+                Hash(..) => panic!(),
+                Ord(b1, ..) => match b1.downcast_ref::<T>() {
+                    Some(b1) => (*b).cmp(b1),
+                    None => TypeId::of::<T>().cmp(&b1.type_id()),
+                },
+                Borrow(b1) => (*b).cmp(b1)
+            }
+        }
+    }
+}
+
+impl Hash for KeyStore {
     fn hash<H1: Hasher>(&self, state: &mut H1) {
         self.0.hash(state);
     }
 }
 
-impl<H: Hasher> PartialEq<Self> for KeyStore<H> {
+impl PartialEq<Self> for KeyStore {
     fn eq(&self, other: &Self) -> bool {
         self.0.eq(&other.0)
     }
 }
-impl<H: Hasher> Eq for KeyStore<H> {
+impl Eq for KeyStore {
+}
+impl PartialOrd<Self> for KeyStore {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
+impl Ord for KeyStore {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.cmp(&other.0)
+    }
 }
 
-fn new_key<T: Hash + Eq + 'static, H: Hasher>(obj: T) -> Key<'static, Never, H> {
-    Key::KeyBox(Box::new(obj), |s, h| {
-        s.downcast_ref::<T>().unwrap().hash(h)
-    }, |a, b| {
-        match b.downcast_ref::<T>() {
-            None => { false }
-            Some(b) => { a.downcast_ref::<T>().unwrap().eq(b) }
-        }
-    })
-}
-
-pub struct TypedMap<Type: MapType, S: BuildHasher = RandomState> {
-    inner: HashMap<KeyStore<S::Hasher>, Box<dyn Any>, S>,
+pub struct TypedMap<Type: MapType, M = HashMap<KeyStore, Box<dyn Any>>> {
+    inner: M,
     _marker: PhantomData<Type>,
 }
 
@@ -107,19 +171,66 @@ impl<Type: MapType> TypedMap<Type> {
         }
     }
 }
+impl<Type: MapType> TypedMap<Type, BTreeMap<KeyStore, Box<dyn Any>>> {
+    pub fn new() -> Self {
+        Self {
+            inner: BTreeMap::new(),
+            _marker: PhantomData,
+        }
+    }
+}
 
-impl<Type: MapType, T> TypedMapSpecialized<Type, T> for TypedMap<Type>
+pub trait Impl<Type: MapType, T> {
+    fn new_key(obj: Type::Key<T>) -> KeyStore;
+}
+
+impl<Type: MapType, T, S: BuildHasher> Impl<Type, T> for TypedMap<Type, HashMap<KeyStore, Box<dyn Any>, S>>
 where
     Type::Key<T>: Hash + Eq + 'static,
     Type::Value<T>: 'static,
 {
+    fn new_key(obj: Type::Key<T>) -> KeyStore {
+        KeyStore(Key::Hash(Box::new(obj), |s, h| {
+            s.downcast_ref::<Type::Key<T>>().unwrap().hash(unsafe {
+                &mut *(h as *mut S::Hasher)
+            })
+        }, |a, b| {
+            match b.downcast_ref::<Type::Key<T>>() {
+                None => { false }
+                Some(b) => { a.downcast_ref::<Type::Key<T>>().unwrap().eq(b) }
+            }
+        }))
+    }
+}
+impl<Type: MapType, T> Impl<Type, T> for TypedMap<Type, BTreeMap<KeyStore, Box<dyn Any>>>
+where
+    Type::Key<T>: Ord + 'static,
+    Type::Value<T>: 'static,
+{
+    fn new_key(obj: Type::Key<T>) -> KeyStore {
+        KeyStore(Key::Ord(Box::new(obj), |s, o| {
+            assert!(s.is::<Type::Key<T>>());
+            match o.downcast_ref::<Type::Key<T>>() {
+                None => TypeId::of::<Type::Key<T>>().cmp(&o.type_id()),
+                Some(b) => { s.downcast_ref::<Type::Key<T>>().unwrap().cmp(b) }
+            }
+        }))
+    }
+}
+
+impl<Type: MapType, T, M> TypedMapSpecialized<Type, T> for TypedMap<Type, M>
+where
+    Self: Impl<Type, T>,
+    Type::Value<T>: 'static,
+    M: for<'a> Map<KeyStore, Box<dyn Any>, Key<'a, Type::Key<T>>>,
+{
     fn insert(&mut self, key: Type::Key<T>, value: Type::Value<T>) {
-        self.inner.insert(KeyStore(new_key(key)), Box::new(value));
+        self.inner.insert(Self::new_key(key), Box::new(value) as Box<dyn Any>);
     }
 
     fn get(&self, key: &Type::Key<T>) -> Option<&Type::Value<T>> {
         self.inner
-            .get(&Key::KeyBorrow(key))
+            .get(&Key::Borrow(key))
             .and_then(|boxed| boxed.downcast_ref())
     }
 }
@@ -137,13 +248,23 @@ fn main() {
     }
     impl<T> Eq for MyTypeId<T> {
     }
+    impl<T> PartialOrd<Self> for MyTypeId<T> {
+        fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+            Some(Ordering::Equal)
+        }
+    }
+    impl<T> Ord for MyTypeId<T> {
+        fn cmp(&self, _other: &Self) -> Ordering {
+            Ordering::Equal
+        }
+    }
     // 2. 定义具体的构造器 (对应你原来的 KeyConstructor 和 ValueConstructor)
     pub struct MyMap;
     impl MapType for MyMap {
         type Key<T> = MyTypeId<T>;
         type Value<T> = Vec<T>;
     }
-    let mut map = TypedMap::<MyMap>::new();
+    let mut map = TypedMap::<MyMap, BTreeMap<_, _>>::new();
     // 场景 1: T = i32
     map.insert(MyTypeId::<i32>(PhantomData), vec![10, 20, 30]);
 
