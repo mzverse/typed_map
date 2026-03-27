@@ -53,51 +53,36 @@ pub trait MapType {
     type Value<T>;
 }
 
-pub trait TypedMapSpecialized<Type: MapType, T, K: Any + ?Sized>
-where
-    Self: Impl<Type, K, T>,
-    Type::Key<T>: BorrowKey<K>,
-{
-    fn insert(&mut self, key: Type::Key<T>, value: Type::Value<T>) -> Option<Type::Value<T>>;
-    fn get<Q>(&self, key: &Q) -> Option<&Type::Value<T>>
-    where
-        Type::Key<T>: Borrow<Q>,
-        Q: BorrowKey<K>;
-}
+pub trait Keyed<K: ?Sized + Any> {
+    fn into_box(self) -> Box<K>;
 
-pub trait BorrowKey<K: Any + ?Sized> {
     fn borrow(&self) -> &K;
 }
 
 // impl
-pub struct TypedMap<Type: MapType, K: Any + ?Sized = dyn KeyDataHash<DefaultHasher>, M = HashMap<Box<K>, Box<dyn Any>>> {
+pub struct TypedMap<Type: MapType, K: ?Sized + Any = dyn KeyDataHash<DefaultHasher>, M = HashMap<Box<K>, Box<dyn Any>>> {
     inner: M,
     _marker: PhantomData<(Type, K)>,
 }
 
-pub trait Impl<Type: MapType, K: Any + ?Sized, T> {
-    fn new_key(obj: Type::Key<T>) -> Box<K>;
+pub trait Impl<Type: MapType, T, K: ?Sized + Any> {
+    fn insert(&mut self, key: Type::Key<T>, value: Type::Value<T>) -> Option<Type::Value<T>>;
+    fn get(&self, key: &Type::Key<T>) -> Option<&Type::Value<T>>;
 }
-
-impl<Type: MapType, T, K: Any + ?Sized, M> TypedMapSpecialized<Type, T, K> for TypedMap<Type, K, M>
+impl<Type: MapType, T, K: ?Sized + Any, M> Impl<Type, T, K> for TypedMap<Type, K, M>
 where
-    Self: Impl<Type, K, T>,
+    Type::Key<T>: Keyed<K>,
     Type::Value<T>: 'static,
     M: Map<Box<K>, Box<dyn Any>, K>,
-    Type::Key<T>: BorrowKey<K>,
 {
     fn insert(&mut self, key: Type::Key<T>, value: Type::Value<T>) -> Option<Type::Value<T>> {
-        self.inner.insert(Self::new_key(key), Box::new(value) as Box<dyn Any>)
+        self.inner.insert(key.into_box(), Box::new(value) as Box<dyn Any>)
             .and_then(|boxed| *boxed.downcast().unwrap())
     }
 
-    fn get<Q>(&self, key: &Q) -> Option<&Type::Value<T>>
-    where
-        Type::Key<T>: Borrow<Q>,
-        Q: BorrowKey<K>,
-    {
+    fn get(&self, key: &Type::Key<T>) -> Option<&Type::Value<T>> {
         self.inner
-            .get(BorrowKey::borrow(key))
+            .get(Keyed::borrow(key))
             .and_then(|boxed| boxed.downcast_ref())
     }
 }
@@ -141,21 +126,16 @@ impl<H: Hasher + 'static> PartialEq<Self> for dyn KeyDataHash<H> {
 impl<H: Hasher + 'static> Eq for dyn KeyDataHash<H> {
 }
 
-impl<H: Hasher + 'static, T: KeyDataHash<H>> BorrowKey<dyn KeyDataHash<H>> for T {
+impl<H: Hasher + 'static, T: KeyDataHash<H>> Keyed<dyn KeyDataHash<H>> for T {
+    fn into_box(self) -> Box<dyn KeyDataHash<H>> {
+        Box::new(self)
+    }
+
     fn borrow(&self) -> &dyn KeyDataHash<H> {
         self
     }
 }
 
-impl<Type: MapType, S: BuildHasher, T> Impl<Type, dyn KeyDataHash<S::Hasher>, T> for TypedMap<Type, dyn KeyDataHash<S::Hasher>, HashMap<Box<dyn KeyDataHash<S::Hasher>>, Box<dyn Any>, S>>
-where
-    S::Hasher: 'static,
-    Type::Key<T>: KeyDataHash<S::Hasher> + 'static,
-{
-    fn new_key(obj: Type::Key<T>) -> Box<dyn KeyDataHash<S::Hasher>> {
-        Box::new(obj)
-    }
-}
 impl<Type: MapType> TypedMap<Type> {
     pub fn new() -> Self {
         Self {
@@ -209,20 +189,17 @@ impl Ord for dyn KeyDataOrd {
 }
 impl<T: ?Sized + Any + DynOrd> KeyDataOrd for T {
 }
-impl<T: KeyDataOrd> BorrowKey<dyn KeyDataOrd> for T {
+
+impl<T: KeyDataOrd> Keyed<dyn KeyDataOrd> for T {
+    fn into_box(self) -> Box<dyn KeyDataOrd> {
+        Box::new(self)
+    }
+
     fn borrow(&self) -> &dyn KeyDataOrd {
         self
     }
 }
 
-impl<Type: MapType, T> Impl<Type, dyn KeyDataOrd, T> for TypedMap<Type, dyn KeyDataOrd, BTreeMap<Box<dyn KeyDataOrd>, Box<dyn Any>>>
-where
-    Type::Key<T>: KeyDataOrd + 'static,
-{
-    fn new_key(obj: Type::Key<T>) -> Box<dyn KeyDataOrd> {
-        Box::new(obj)
-    }
-}
 impl<Type: MapType> TypedMap<Type, dyn KeyDataOrd, BTreeMap<Box<dyn KeyDataOrd>, Box<dyn Any>>>
 {
     pub fn new() -> Self {
@@ -276,7 +253,7 @@ mod tests {
         let option;
         {
             let id = MyTypeId::<i32>(PhantomData);
-            option = map.get(&id);
+            option = map.get(&&id);
         }
         if let Some(val) = option {
             println!("Got i32 vec: {:?}", val);
