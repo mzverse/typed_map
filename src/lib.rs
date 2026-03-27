@@ -1,51 +1,17 @@
+mod map;
+
 use std::any::{Any, TypeId};
-use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, DefaultHasher, Hash, Hasher};
 use std::marker::PhantomData;
+use crate::map::Map;
+
 
 // // util
 // fn is_dyn_any<T: ?Sized + Any>(any: &T) -> bool {
 //     any.type_id() != TypeId::of::<T>()
 // }
-
-// map
-pub trait Map<K, V, Q: ?Sized>
-{
-    fn insert(&mut self, key: K, value: V) -> Option<V>;
-    fn get(&self, key: &Q) -> Option<&V>;
-}
-impl<K, V, Q: ?Sized, S> Map<K, V, Q> for HashMap<K, V, S>
-where
-    K: Eq + Hash,
-    S: BuildHasher,
-    K: Borrow<Q>,
-    Q: Eq + Hash,
-{
-    fn insert(&mut self, key: K, value: V) -> Option<V> {
-        HashMap::insert(self, key, value)
-    }
-
-    fn get(&self, key: &Q) -> Option<&V> {
-         HashMap::get(self, key)
-    }
-}
-impl<K, V, Q: ?Sized> Map<K, V, Q> for BTreeMap<K, V>
-where
-    K: Ord,
-    K: Borrow<Q>,
-    Q: Ord,
-{
-    fn insert(&mut self, key: K, value: V) -> Option<V> {
-        BTreeMap::insert(self, key, value)
-    }
-
-    fn get(&self, key: &Q) -> Option<&V> {
-        BTreeMap::get(self, key)
-    }
-}
-
 
 // key
 pub trait MapType {
@@ -53,10 +19,14 @@ pub trait MapType {
     type Value<T>;
 }
 
-pub trait Keyed<K: ?Sized + Any> {
-    fn into_box(self) -> Box<K>;
+pub trait Key<T: Sized>: Any {
+    fn new(data: T) -> Box<Self>;
 
-    fn borrow(&self) -> &K;
+    fn borrow(data: &T) -> &Self;
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any>;
+
+    fn as_any(self: &Self) -> &dyn Any;
 }
 
 // impl
@@ -64,26 +34,79 @@ pub struct TypedMap<Type: MapType, K: ?Sized + Any = dyn KeyDataHash<DefaultHash
     inner: M,
     _marker: PhantomData<(Type, K)>,
 }
+impl<Type: MapType, K: ?Sized + Any, M> TypedMap<Type, K, M> {
+    pub fn with_inner(inner: M) -> Self {
+        Self {
+            inner,
+            _marker: PhantomData,
+        }
+    }
+}
 
 pub trait Impl<Type: MapType, T, K: ?Sized + Any> {
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool;
+
     fn insert(&mut self, key: Type::Key<T>, value: Type::Value<T>) -> Option<Type::Value<T>>;
+    fn contains_key(&self, key: &Type::Key<T>) -> bool;
     fn get(&self, key: &Type::Key<T>) -> Option<&Type::Value<T>>;
+    fn get_mut(&mut self, key: &Type::Key<T>) -> Option<&mut Type::Value<T>>;
+    fn get_disjoint_mut<const N: usize>(&mut self, ks: [&Type::Key<T>; N]) -> [Option<&mut Type::Value<T>>; N];
+    fn remove(&mut self, key: &Type::Key<T>) -> Option<Type::Value<T>>;
+    fn remove_entry(&mut self, key: &Type::Key<T>) -> Option<(Type::Key<T>, Type::Value<T>)>;
 }
-impl<Type: MapType, T, K: ?Sized + Any, M> Impl<Type, T, K> for TypedMap<Type, K, M>
+impl<Type: MapType, T, K: ?Sized + Key<Type::Key<T>>, M> Impl<Type, T, K> for TypedMap<Type, K, M>
 where
-    Type::Key<T>: Keyed<K>,
+    Type::Key<T>: 'static,
     Type::Value<T>: 'static,
     M: Map<Box<K>, Box<dyn Any>, K>,
 {
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
     fn insert(&mut self, key: Type::Key<T>, value: Type::Value<T>) -> Option<Type::Value<T>> {
-        self.inner.insert(key.into_box(), Box::new(value) as Box<dyn Any>)
-            .and_then(|boxed| *boxed.downcast().unwrap())
+        self.inner.insert(K::new(key), Box::new(value) as Box<dyn Any>)
+            .map(|boxed| *boxed.downcast().unwrap())
+    }
+
+    fn contains_key(&self, key: &Type::Key<T>) -> bool {
+        self.inner
+            .contains_key(Key::borrow(key))
     }
 
     fn get(&self, key: &Type::Key<T>) -> Option<&Type::Value<T>> {
         self.inner
-            .get(Keyed::borrow(key))
-            .and_then(|boxed| boxed.downcast_ref())
+            .get(Key::borrow(key))
+            .map(|boxed| boxed.downcast_ref().unwrap())
+    }
+
+    fn get_mut(&mut self, key: &Type::Key<T>) -> Option<&mut Type::Value<T>> {
+        self.inner
+            .get_mut(Key::borrow(key))
+            .map(|boxed| boxed.downcast_mut().unwrap())
+    }
+
+    fn get_disjoint_mut<const N: usize>(&mut self, ks: [&Type::Key<T>; N]) -> [Option<&mut Type::Value<T>>; N] {
+        self.inner.get_disjoint_mut(ks.map(Key::borrow))
+            .map(|it|
+                it.map(|boxed| boxed.downcast_mut().unwrap()))
+    }
+
+    fn remove(&mut self, key: &Type::Key<T>) -> Option<Type::Value<T>> {
+        self.inner
+            .remove(Key::borrow(key))
+            .map(|boxed| *boxed.downcast().unwrap())
+    }
+
+    fn remove_entry(&mut self, key: &Type::Key<T>) -> Option<(Type::Key<T>, Type::Value<T>)> {
+        self.inner
+            .remove_entry(Key::borrow(key))
+            .map(|(k, v)| (*k.into_any().downcast().unwrap(), *v.downcast().unwrap()))
     }
 }
 
@@ -126,22 +149,27 @@ impl<H: Hasher + 'static> PartialEq<Self> for dyn KeyDataHash<H> {
 impl<H: Hasher + 'static> Eq for dyn KeyDataHash<H> {
 }
 
-impl<H: Hasher + 'static, T: KeyDataHash<H>> Keyed<dyn KeyDataHash<H>> for T {
-    fn into_box(self) -> Box<dyn KeyDataHash<H>> {
-        Box::new(self)
+impl<H: Hasher + 'static, T: KeyDataHash<H>> Key<T> for dyn KeyDataHash<H> {
+    fn new(data: T) -> Box<Self> {
+        Box::new(data)
     }
 
-    fn borrow(&self) -> &dyn KeyDataHash<H> {
+    fn borrow(data: &T) -> &dyn KeyDataHash<H> {
+        data
+    }
+
+    fn into_any(self: Box<dyn KeyDataHash<H>>) -> Box<dyn Any> {
+        self
+    }
+
+    fn as_any(&self) -> &dyn Any {
         self
     }
 }
 
 impl<Type: MapType> TypedMap<Type> {
     pub fn new() -> Self {
-        Self {
-            inner: HashMap::new(),
-            _marker: PhantomData,
-        }
+        Self::with_inner(HashMap::new())
     }
 }
 impl<Type: MapType, S: BuildHasher> TypedMap<Type, dyn KeyDataHash<S::Hasher>, HashMap<Box<dyn KeyDataHash<S::Hasher>>, Box<dyn Any>, S>>
@@ -149,10 +177,7 @@ where
     S::Hasher: 'static
 {
     pub fn with_hasher(hash_builder: S) -> Self {
-        Self {
-            inner: HashMap::with_hasher(hash_builder),
-            _marker: PhantomData,
-        }
+        Self::with_inner(HashMap::with_hasher(hash_builder))
     }
 }
 
@@ -190,12 +215,20 @@ impl Ord for dyn KeyDataOrd {
 impl<T: ?Sized + Any + DynOrd> KeyDataOrd for T {
 }
 
-impl<T: KeyDataOrd> Keyed<dyn KeyDataOrd> for T {
-    fn into_box(self) -> Box<dyn KeyDataOrd> {
-        Box::new(self)
+impl<T: KeyDataOrd> Key<T> for dyn KeyDataOrd {
+    fn new(data: T) -> Box<Self> {
+        Box::new(data)
     }
 
-    fn borrow(&self) -> &dyn KeyDataOrd {
+    fn borrow(data: &T) -> &Self {
+        data
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+
+    fn as_any(&self) -> &dyn Any {
         self
     }
 }
