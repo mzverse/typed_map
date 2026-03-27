@@ -43,7 +43,10 @@ impl<Type: MapType, K: ?Sized + Any, M> TypedMap<Type, K, M> {
     }
 }
 
-pub trait Impl<Type: MapType, T, K: ?Sized + Any> {
+pub trait Impl<Type: MapType, T, K: ?Sized + Any, M>
+where
+    M: Map<Box<K>, Box<dyn Any>, K>,
+{
     fn len(&self) -> usize;
     fn is_empty(&self) -> bool;
 
@@ -55,7 +58,7 @@ pub trait Impl<Type: MapType, T, K: ?Sized + Any> {
     fn remove(&mut self, key: &Type::Key<T>) -> Option<Type::Value<T>>;
     fn remove_entry(&mut self, key: &Type::Key<T>) -> Option<(Type::Key<T>, Type::Value<T>)>;
 }
-impl<Type: MapType, T, K: ?Sized + Key<Type::Key<T>>, M> Impl<Type, T, K> for TypedMap<Type, K, M>
+impl<Type: MapType, T, K: ?Sized + Key<Type::Key<T>>, M> Impl<Type, T, K, M> for TypedMap<Type, K, M>
 where
     Type::Key<T>: 'static,
     Type::Value<T>: 'static,
@@ -107,6 +110,49 @@ where
         self.inner
             .remove_entry(Key::borrow(key))
             .map(|(k, v)| (*k.into_any().downcast().unwrap(), *v.downcast().unwrap()))
+    }
+}
+impl<Type: MapType, K: ?Sized + Any, M> TypedMap<Type, K, M>
+where
+    M: Map<Box<K>, Box<dyn Any>, K>,
+{
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &dyn Any)> {
+        self.inner.iter().map(|(k, v)| (k.as_ref(), v.as_ref()))
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&K, &mut dyn Any)> {
+        self.inner.iter_mut().map(|(k, v)| (k.as_ref(), v.as_mut()))
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &K> {
+        self.inner.keys().map(Box::as_ref)
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &dyn Any> {
+        self.inner.values().map(Box::as_ref)
+    }
+
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut dyn Any> {
+        self.inner.values_mut().map(Box::as_mut)
+    }
+
+    pub fn into_keys(self) -> impl Iterator<Item = Box<K>> {
+        self.inner.into_keys()
+    }
+
+    pub fn into_values(self) -> impl Iterator<Item = Box<dyn Any>> {
+        self.inner.into_values()
+    }
+}
+impl<Type: MapType, K: ?Sized + Any, M> IntoIterator for TypedMap<Type, K, M>
+where
+    M: Map<Box<K>, Box<dyn Any>, K>,
+{
+    type Item = (Box<K>, Box<dyn Any>);
+    type IntoIter = M::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter()
     }
 }
 
@@ -297,6 +343,10 @@ mod tests {
             println!("Got String vec: {:?}", val);
         } else {
             panic!();
+        }
+
+        for x in map.into_keys() {
+            println!("{:?}", x.as_ref() as *const _);
         }
     }
 
