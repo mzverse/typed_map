@@ -2,17 +2,21 @@ use std::any::{Any, TypeId};
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
-use std::convert::Infallible;
-use std::hash::{BuildHasher, Hash, Hasher, RandomState};
+use std::hash::{BuildHasher, DefaultHasher, Hash, Hasher};
 use std::marker::PhantomData;
 
+// // util
+// fn is_dyn_any<T: ?Sized + Any>(any: &T) -> bool {
+//     any.type_id() != TypeId::of::<T>()
+// }
+
 // map
-pub trait Map<K, V, Q>
+pub trait Map<K, V, Q: ?Sized>
 {
     fn insert(&mut self, key: K, value: V) -> Option<V>;
     fn get(&self, key: &Q) -> Option<&V>;
 }
-impl<K, V, Q, S> Map<K, V, Q> for HashMap<K, V, S>
+impl<K, V, Q: ?Sized, S> Map<K, V, Q> for HashMap<K, V, S>
 where
     K: Eq + Hash,
     S: BuildHasher,
@@ -27,7 +31,7 @@ where
          HashMap::get(self, key)
     }
 }
-impl<K, V, Q> Map<K, V, Q> for BTreeMap<K, V>
+impl<K, V, Q: ?Sized> Map<K, V, Q> for BTreeMap<K, V>
 where
     K: Ord,
     K: Borrow<Q>,
@@ -49,127 +53,107 @@ pub trait MapType {
     type Value<T>;
 }
 
-pub trait TypedMapSpecialized<Type: MapType, T> {
+pub trait TypedMapSpecialized<Type: MapType, T, K: Any + ?Sized>
+where
+    Self: Impl<Type, K, T>,
+    Type::Key<T>: BorrowKey<K>,
+{
     fn insert(&mut self, key: Type::Key<T>, value: Type::Value<T>) -> Option<Type::Value<T>>;
-    fn get(&self, key: &Type::Key<T>) -> Option<&Type::Value<T>>;
+    fn get<Q>(&self, key: &Q) -> Option<&Type::Value<T>>
+    where
+        Type::Key<T>: Borrow<Q>,
+        Q: BorrowKey<K>;
 }
 
-type Never = Infallible;
-
-pub trait KeyData {
-    type Map;
-    fn as_ref(&self) -> &dyn Any;
-}
-
-pub trait KeyFlag {
-}
-pub struct KeyFlagOwn;
-struct KeyFlagBorrow;
-impl KeyFlag for KeyFlagOwn {
-}
-impl KeyFlag for KeyFlagBorrow {
-}
-
-#[repr(C)]
-pub enum Key<'a, T, D: KeyData, F: KeyFlag> {
-    Own(D),
-    Borrow(&'a T, F),
-}
-
-impl<'a, T, D: KeyData> Borrow<Key<'a, T, D, KeyFlagBorrow>> for Key<'static, Never, D, KeyFlagOwn> {
-    fn borrow(&self) -> &Key<'a, T, D, KeyFlagBorrow> {
-        assert!(matches!(self, Key::Own(..)));
-        unsafe {
-            std::mem::transmute::<&Key<'static, Never, D, KeyFlagOwn>, &Key<'a, T, D, KeyFlagBorrow>>(&self)
-        }
-    }
+pub trait BorrowKey<K: Any + ?Sized> {
+    fn borrow(&self) -> &K;
 }
 
 // impl
-pub struct TypedMap<Type: MapType, K: KeyData = KeyDataHash<RandomState>> {
-    inner: K::Map,
+pub struct TypedMap<Type: MapType, K: Any + ?Sized = dyn KeyDataHash<DefaultHasher>, M = HashMap<Box<K>, Box<dyn Any>>> {
+    inner: M,
     _marker: PhantomData<(Type, K)>,
 }
 
-pub trait Impl<Type: MapType, K: KeyData, T> {
-    fn new_key(obj: Type::Key<T>) -> Key<'static, Never, K, KeyFlagOwn>;
+pub trait Impl<Type: MapType, K: Any + ?Sized, T> {
+    fn new_key(obj: Type::Key<T>) -> Box<K>;
 }
 
-impl<Type: MapType, T, K: KeyData> TypedMapSpecialized<Type, T> for TypedMap<Type, K>
+impl<Type: MapType, T, K: Any + ?Sized, M> TypedMapSpecialized<Type, T, K> for TypedMap<Type, K, M>
 where
     Self: Impl<Type, K, T>,
     Type::Value<T>: 'static,
-    K::Map: for<'a> Map<Key<'static, Never, K, KeyFlagOwn>, Box<dyn Any>, Key<'a, Type::Key<T>, K, KeyFlagBorrow>>,
+    M: Map<Box<K>, Box<dyn Any>, K>,
+    Type::Key<T>: BorrowKey<K>,
 {
     fn insert(&mut self, key: Type::Key<T>, value: Type::Value<T>) -> Option<Type::Value<T>> {
         self.inner.insert(Self::new_key(key), Box::new(value) as Box<dyn Any>)
             .and_then(|boxed| *boxed.downcast().unwrap())
     }
 
-    fn get(&self, key: &Type::Key<T>) -> Option<&Type::Value<T>> {
+    fn get<Q>(&self, key: &Q) -> Option<&Type::Value<T>>
+    where
+        Type::Key<T>: Borrow<Q>,
+        Q: BorrowKey<K>,
+    {
         self.inner
-            .get(&Key::Borrow(key, KeyFlagBorrow))
+            .get(BorrowKey::borrow(key))
             .and_then(|boxed| boxed.downcast_ref())
     }
 }
 
 // hash
-pub struct KeyDataHash<S: BuildHasher>(Box<dyn Any>, fn(&dyn Any, &mut S::Hasher), fn(&dyn Any, &dyn Any) -> bool);
-impl<S: BuildHasher> KeyData for KeyDataHash<S> {
-    type Map = HashMap<Key<'static, Never, Self, KeyFlagOwn>, Box<dyn Any>, S>;
-    fn as_ref(&self) -> &dyn Any {
-        self.0.as_ref()
+trait DynHash<H: Hasher> {
+    fn hash(&self, state: &mut H);
+}
+impl<T: Hash, H: Hasher> DynHash<H> for T {
+    fn hash(&self, state: &mut H) {
+        Hash::hash(self, state)
     }
 }
-impl<T: Hash, S: BuildHasher, F: KeyFlag> Hash for Key<'_, T, KeyDataHash<S>, F> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        use Key::*;
-        match self {
-            Own(own) => {
-                own.1(own.as_ref(), unsafe {
-                    std::mem::transmute::<&mut H, &mut S::Hasher>(state) // assert
-                });
-            }
-            Borrow(borrow, ..) => borrow.hash(state),
+trait DynEq {
+    fn eq(&self, other: &dyn Any) -> bool;
+}
+impl<T: Eq + 'static> DynEq for T {
+    fn eq(&self, other: &dyn Any) -> bool {
+        match other.downcast_ref::<Self>() {
+            None => false,
+            Some(other) => PartialEq::eq(self, other),
         }
     }
 }
-impl<T: Eq + 'static, S: BuildHasher, F: KeyFlag> PartialEq<Self> for Key<'_, T, KeyDataHash<S>, F> {
+#[allow(private_bounds)]
+pub trait KeyDataHash<H: Hasher>: Any + DynHash<H> + DynEq {
+}
+impl<T: ?Sized + Any + DynHash<H> + DynEq, H: Hasher> KeyDataHash<H> for T {
+}
+
+impl<H: Hasher + 'static> Hash for dyn KeyDataHash<H> {
+    fn hash<H1: Hasher>(&self, state: &mut H1) {
+        self.hash(unsafe { &mut *(state as *mut H1 as *mut H) });
+    }
+}
+impl<H: Hasher + 'static> PartialEq<Self> for dyn KeyDataHash<H> {
     fn eq(&self, other: &Self) -> bool {
-        use Key::*;
-        match self {
-            Own(s) => match other {
-                Own(o) => s.2(s.as_ref(), o.as_ref()),
-                Borrow(..) => other.eq(self),
-            },
-            Borrow(s, ..) => match other {
-                Own(o) => match o.as_ref().downcast_ref::<T>() {
-                    None => false,
-                    Some(o) => s.eq(&o),
-                },
-                Borrow(o, ..) => s.eq(o)
-            }
-        }
+        DynEq::eq(self, other)
     }
 }
-impl<T: Eq + 'static, S: BuildHasher, F: KeyFlag> Eq for Key<'_, T, KeyDataHash<S>, F> {
+impl<H: Hasher + 'static> Eq for dyn KeyDataHash<H> {
 }
-impl<Type: MapType, T, S: BuildHasher> Impl<Type, KeyDataHash<S>, T> for TypedMap<Type, KeyDataHash<S>>
+
+impl<H: Hasher + 'static, T: KeyDataHash<H>> BorrowKey<dyn KeyDataHash<H>> for T {
+    fn borrow(&self) -> &dyn KeyDataHash<H> {
+        self
+    }
+}
+
+impl<Type: MapType, S: BuildHasher, T> Impl<Type, dyn KeyDataHash<S::Hasher>, T> for TypedMap<Type, dyn KeyDataHash<S::Hasher>, HashMap<Box<dyn KeyDataHash<S::Hasher>>, Box<dyn Any>, S>>
 where
-    Type::Key<T>: Hash + Eq + 'static,
-    Type::Value<T>: 'static,
+    S::Hasher: 'static,
+    Type::Key<T>: KeyDataHash<S::Hasher> + 'static,
 {
-    fn new_key(obj: Type::Key<T>) -> Key<'static, Never, KeyDataHash<S>, KeyFlagOwn> {
-        Key::Own(KeyDataHash(Box::new(obj), |s, h| {
-            s.downcast_ref::<Type::Key<T>>().unwrap().hash(unsafe {
-                &mut *(h as *mut S::Hasher)
-            })
-        }, |a, b| {
-            match b.downcast_ref::<Type::Key<T>>() {
-                None => { false }
-                Some(b) => { a.downcast_ref::<Type::Key<T>>().unwrap().eq(b) }
-            }
-        }))
+    fn new_key(obj: Type::Key<T>) -> Box<dyn KeyDataHash<S::Hasher>> {
+        Box::new(obj)
     }
 }
 impl<Type: MapType> TypedMap<Type> {
@@ -180,7 +164,10 @@ impl<Type: MapType> TypedMap<Type> {
         }
     }
 }
-impl<Type: MapType, S: BuildHasher> TypedMap<Type, KeyDataHash<S>> {
+impl<Type: MapType, S: BuildHasher> TypedMap<Type, dyn KeyDataHash<S::Hasher>, HashMap<Box<dyn KeyDataHash<S::Hasher>>, Box<dyn Any>, S>>
+where
+    S::Hasher: 'static
+{
     pub fn with_hasher(hash_builder: S) -> Self {
         Self {
             inner: HashMap::with_hasher(hash_builder),
@@ -189,62 +176,55 @@ impl<Type: MapType, S: BuildHasher> TypedMap<Type, KeyDataHash<S>> {
     }
 }
 
-// b tree
-pub struct KeyDataBTree(Box<dyn Any>, fn(&dyn Any, &dyn Any) -> Ordering);
-impl KeyData for KeyDataBTree {
-    type Map = BTreeMap<Key<'static, Never, Self, KeyFlagOwn>, Box<dyn Any>>;
-    fn as_ref(&self) -> &dyn Any {
-        self.0.as_ref()
+// ord
+trait DynOrd {
+    fn cmp(&self, other: &dyn Any) -> Ordering;
+}
+impl<T: Ord + 'static> DynOrd for T {
+    fn cmp(&self, other: &dyn Any) -> Ordering {
+        match other.downcast_ref::<Self>() {
+            None => Ord::cmp(&TypeId::of::<Self>(), &other.type_id()),
+            Some(other) => Ord::cmp(self, other),
+        }
     }
 }
-
-impl<T: Ord + 'static, F: KeyFlag> PartialEq<Self> for Key<'_, T, KeyDataBTree, F> {
+#[allow(private_bounds)]
+pub trait KeyDataOrd: Any + DynOrd {
+}
+impl PartialEq<Self> for dyn KeyDataOrd {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
     }
 }
-impl<T: Ord + 'static, F: KeyFlag> Eq for Key<'_, T, KeyDataBTree, F> {
-}
-impl<T: Ord + 'static, F: KeyFlag> PartialOrd<Self> for Key<'_, T, KeyDataBTree, F> {
+impl Eq for dyn KeyDataOrd {}
+impl PartialOrd<Self> for dyn KeyDataOrd {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-impl<T: Ord + 'static, F: KeyFlag> Ord for Key<'_, T, KeyDataBTree, F> {
+impl Ord for dyn KeyDataOrd {
     fn cmp(&self, other: &Self) -> Ordering {
-        use Key::*;
-        match self {
-            Own(s) => match other {
-                Own(o) => s.1(s.as_ref(), o.as_ref()),
-                Borrow(..) => other.cmp(self).reverse(),
-            },
-            Borrow(s, ..) => match other {
-                Own(o) => match o.as_ref().downcast_ref::<T>() {
-                    None => TypeId::of::<T>().cmp(&o.as_ref().type_id()),
-                    Some(o) => (*s).cmp(o),
-                },
-                Borrow(o, ..) => s.cmp(o),
-            },
-        }
+        DynOrd::cmp(self, other)
+    }
+}
+impl<T: ?Sized + Any + DynOrd> KeyDataOrd for T {
+}
+impl<T: KeyDataOrd> BorrowKey<dyn KeyDataOrd> for T {
+    fn borrow(&self) -> &dyn KeyDataOrd {
+        self
     }
 }
 
-impl<Type: MapType, T> Impl<Type, KeyDataBTree, T> for TypedMap<Type, KeyDataBTree>
+impl<Type: MapType, T> Impl<Type, dyn KeyDataOrd, T> for TypedMap<Type, dyn KeyDataOrd, BTreeMap<Box<dyn KeyDataOrd>, Box<dyn Any>>>
 where
-    Type::Key<T>: Ord + 'static,
-    Type::Value<T>: 'static,
+    Type::Key<T>: KeyDataOrd + 'static,
 {
-    fn new_key(obj: Type::Key<T>) -> Key<'static, Never, KeyDataBTree, KeyFlagOwn> {
-        Key::Own(KeyDataBTree(Box::new(obj), |s, o| {
-            assert!(s.is::<Type::Key<T>>());
-            match o.downcast_ref::<Type::Key<T>>() {
-                None => TypeId::of::<Type::Key<T>>().cmp(&o.type_id()),
-                Some(b) => { s.downcast_ref::<Type::Key<T>>().unwrap().cmp(b) }
-            }
-        }))
+    fn new_key(obj: Type::Key<T>) -> Box<dyn KeyDataOrd> {
+        Box::new(obj)
     }
 }
-impl<Type: MapType> TypedMap<Type, KeyDataBTree> {
+impl<Type: MapType> TypedMap<Type, dyn KeyDataOrd, BTreeMap<Box<dyn KeyDataOrd>, Box<dyn Any>>>
+{
     pub fn new() -> Self {
         Self {
             inner: BTreeMap::new(),
@@ -255,10 +235,10 @@ impl<Type: MapType> TypedMap<Type, KeyDataBTree> {
 
 #[cfg(test)]
 mod tests {
+    use crate::*;
     use std::cmp::Ordering;
     use std::hash::{Hash, Hasher};
     use std::marker::PhantomData;
-    use crate::*;
 
     #[test]
     fn test_hash() {
@@ -339,7 +319,7 @@ mod tests {
             type Key<T> = MyTypeId<T>;
             type Value<T> = Vec<T>;
         }
-        let mut map = TypedMap::<MyMap, KeyDataBTree>::new();
+        let mut map = TypedMap::<MyMap, dyn KeyDataOrd, BTreeMap<Box<dyn KeyDataOrd>, Box<dyn Any>>>::new();
         map.insert(MyTypeId::<i32>(PhantomData), vec![10, 20, 30]);
 
         map.insert(MyTypeId::<String>(PhantomData), vec!["Hello".to_string(), "World".to_string()]);
