@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, DefaultHasher, Hash, Hasher};
 use std::marker::PhantomData;
-use crate::map::Map;
+use crate::map::{Entry, Map};
 
 
 // // util
@@ -26,7 +26,7 @@ pub trait Key<T: Sized>: Any {
 
     fn into_any(self: Box<Self>) -> Box<dyn Any>;
 
-    fn as_any(self: &Self) -> &dyn Any;
+    fn as_any(&self) -> &dyn Any;
 }
 
 // impl
@@ -37,13 +37,80 @@ impl<Type: MapType, K: ?Sized + Any, M> TypedMap<Type, K, M> {
     }
 }
 
+pub struct OccupiedEntry<'a, Type: MapType, T, K: ?Sized + Any, M>(M::OccupiedEntry<'a>, PhantomData<(Type, T, K)>)
+where
+    M: Map<Box<K>, Box<dyn Any>, K> + 'a;
+pub struct VacantEntry<'a, Type: MapType, T, K: ?Sized + Any, M>(M::VacantEntry<'a>, PhantomData<(Type, T, K)>)
+where
+    M: Map<Box<K>, Box<dyn Any>, K> + 'a;
+
+impl<'a, Type: MapType, T, K: ?Sized + Any, M> map::OccupiedEntry<'a, Type::Key<T>, Type::Value<T>> for OccupiedEntry<'a, Type, T, K, M>
+where
+    M: Map<Box<K>, Box<dyn Any>, K> + 'a,
+    K: Key<Type::Key<T>>,
+    Type::Key<T>: 'static,
+    Type::Value<T>: 'static,
+{
+    fn key(&self) -> &Type::Key<T> {
+        self.0.key().as_any().downcast_ref().unwrap()
+    }
+
+    fn remove_entry(self) -> (Type::Key<T>, Type::Value<T>) {
+        let (k, v) = self.0.remove_entry();
+        (*k.into_any().downcast().unwrap(), *v.downcast().unwrap())
+    }
+
+    fn get(&self) -> &Type::Value<T> {
+        self.0.get().downcast_ref().unwrap()
+    }
+
+    fn get_mut(&mut self) -> &mut Type::Value<T> {
+        self.0.get_mut().downcast_mut().unwrap()
+    }
+
+    fn into_mut(self) -> &'a mut Type::Value<T> {
+        self.0.into_mut().downcast_mut().unwrap()
+    }
+
+    fn insert(&mut self, value: Type::Value<T>) -> Type::Value<T> {
+        *self.0.insert(Box::new(value)).downcast().unwrap()
+    }
+
+    fn remove(self) -> Type::Value<T> {
+        *self.0.remove().downcast().unwrap()
+    }
+}
+impl<'a, Type: MapType, T, K: ?Sized + Any, M> map::VacantEntry<'a, Type::Key<T>, Type::Value<T>> for VacantEntry<'a, Type, T, K, M>
+where
+    M: Map<Box<K>, Box<dyn Any>, K> + 'a,
+    K: Key<Type::Key<T>>,
+    Type::Key<T>: 'static,
+    Type::Value<T>: 'static,
+{
+    type Occupied = OccupiedEntry<'a, Type, T, K, M>;
+
+    fn key(&self) -> &Type::Key<T> {
+        self.0.key().as_any().downcast_ref().unwrap()
+    }
+
+    fn into_key(self) -> Type::Key<T> {
+        *self.0.into_key().into_any().downcast().unwrap()
+    }
+
+    fn insert(self, value: Type::Value<T>) -> &'a mut Type::Value<T> {
+        self.0.insert(Box::new(value)).downcast_mut().unwrap()
+    }
+
+    fn insert_entry(self, value: Type::Value<T>) -> Self::Occupied {
+        OccupiedEntry(self.0.insert_entry(Box::new(value)), PhantomData)
+    }
+}
+
 pub trait Impl<Type: MapType, T, K: ?Sized + Any, M>
 where
     M: Map<Box<K>, Box<dyn Any>, K>,
 {
-    fn len(&self) -> usize;
-    fn is_empty(&self) -> bool;
-
+    fn entry(&mut self, key: Type::Key<T>) -> Entry<OccupiedEntry<'_, Type, T, K, M>, VacantEntry<'_, Type, T, K, M>>;
     fn insert(&mut self, key: Type::Key<T>, value: Type::Value<T>) -> Option<Type::Value<T>>;
     fn contains_key(&self, key: &Type::Key<T>) -> bool;
     fn get(&self, key: &Type::Key<T>) -> Option<&Type::Value<T>>;
@@ -58,12 +125,11 @@ where
     Type::Value<T>: 'static,
     M: Map<Box<K>, Box<dyn Any>, K>,
 {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
+    fn entry(&mut self, key: Type::Key<T>) -> Entry<OccupiedEntry<'_, Type, T, K, M>, VacantEntry<'_, Type, T, K, M>> {
+        match self.0.entry(K::new(key)) {
+            Entry::Occupied(r) => Entry::Occupied(OccupiedEntry(r, PhantomData)),
+            Entry::Vacant(r) => Entry::Vacant(VacantEntry(r, PhantomData)),
+        }
     }
 
     fn insert(&mut self, key: Type::Key<T>, value: Type::Value<T>) -> Option<Type::Value<T>> {
@@ -110,6 +176,18 @@ impl<Type: MapType, K: ?Sized + Any, M> TypedMap<Type, K, M>
 where
     M: Map<Box<K>, Box<dyn Any>, K>,
 {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&K, &dyn Any)> {
         self.0.iter().map(|(k, v)| (k.as_ref(), v.as_ref()))
     }
