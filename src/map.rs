@@ -2,12 +2,45 @@ use std::borrow::Borrow;
 use std::collections::{btree_map, hash_map, BTreeMap, HashMap, HashSet};
 use std::hash::{BuildHasher, Hash};
 
-pub trait MapEntry<K, V> {
-    // TODO
+pub trait OccupiedEntry<'a, K, V> {
+    fn key(&self) -> &K;
+
+    fn remove_entry(self) -> (K, V);
+
+    fn get(&self) -> &V;
+
+    fn get_mut(&mut self) -> &mut V;
+
+    fn into_mut(self) -> &'a mut V;
+
+    fn insert(&mut self, value: V) -> V;
+
+    fn remove(self) -> V;
 }
+pub trait VacantEntry<'a, K, V> {
+    type Occupied: OccupiedEntry<'a, K, V>;
+
+    fn key(&self) -> &K;
+
+    fn into_key(self) -> K;
+
+    fn insert(self, value: V) -> &'a mut V;
+
+    fn insert_entry(self, value: V) -> Self::Occupied;
+}
+pub enum Entry<Occupied, Vacant> {
+    Occupied(Occupied),
+    Vacant(Vacant),
+}
+use Entry::*;
 pub trait Map<K, V, Q: ?Sized>: IntoIterator<Item=(K, V)>
 {
-    type Entry<'a>: MapEntry<K, V>
+    type OccupiedEntry<'a>: OccupiedEntry<'a, K, V>
+    where
+        Self: 'a,
+        K: 'a,
+        V: 'a;
+    type VacantEntry<'a>: VacantEntry<'a, K, V, Occupied = Self::OccupiedEntry<'a>>
     where
         Self: 'a,
         K: 'a,
@@ -53,7 +86,7 @@ pub trait Map<K, V, Q: ?Sized>: IntoIterator<Item=(K, V)>
 
     fn clear(&mut self);
 
-    fn entry(&mut self, key: K) -> Self::Entry<'_>;
+    fn entry(&mut self, key: K) -> Entry<Self::OccupiedEntry<'_>, Self::VacantEntry<'_>>;
 
     fn insert(&mut self, key: K, value: V) -> Option<V>;
 
@@ -85,8 +118,53 @@ pub trait Map<K, V, Q: ?Sized>: IntoIterator<Item=(K, V)>
 
     fn into_values(self) -> Self::IntoValues;
 }
-impl<K, V> MapEntry<K, V> for hash_map::Entry<'_, K, V> {
+impl<'a, K, V> OccupiedEntry<'a, K, V> for hash_map::OccupiedEntry<'a, K, V> {
+    fn key(&self) -> &K {
+        self.key()
+    }
 
+    fn remove_entry(self) -> (K, V) {
+        self.remove_entry()
+    }
+
+    fn get(&self) -> &V {
+        self.get()
+    }
+
+    fn get_mut(&mut self) -> &mut V {
+        self.get_mut()
+    }
+
+    fn into_mut(self) -> &'a mut V {
+        self.into_mut()
+    }
+
+    fn insert(&mut self, value: V) -> V {
+        self.insert(value)
+    }
+
+    fn remove(self) -> V {
+        self.remove()
+    }
+}
+impl<'a, K, V> VacantEntry<'a, K, V> for hash_map::VacantEntry<'a, K, V> {
+    type Occupied = hash_map::OccupiedEntry<'a, K, V>;
+
+    fn key(&self) -> &K {
+        self.key()
+    }
+
+    fn into_key(self) -> K {
+        self.into_key()
+    }
+
+    fn insert(self, value: V) -> &'a mut V {
+        self.insert(value)
+    }
+
+    fn insert_entry(self, value: V) -> Self::Occupied {
+        self.insert_entry(value)
+    }
 }
 impl<K, V, Q: ?Sized, S> Map<K, V, Q> for HashMap<K, V, S>
 where
@@ -95,7 +173,12 @@ where
     K: Borrow<Q>,
     Q: Eq + Hash,
 {
-    type Entry<'a> = hash_map::Entry<'a, K, V>
+    type OccupiedEntry<'a> = hash_map::OccupiedEntry<'a, K, V>
+    where
+        K: 'a,
+        V: 'a,
+        S: 'a;
+    type VacantEntry<'a> = hash_map::VacantEntry<'a, K, V>
     where
         K: 'a,
         V: 'a,
@@ -136,83 +219,138 @@ where
     type IntoValues = hash_map::IntoValues<K, V>;
 
     fn len(&self) -> usize {
-        HashMap::len(self)
+        self.len()
     }
 
     fn is_empty(&self) -> bool {
-        HashMap::is_empty(self)
+        self.is_empty()
     }
 
     fn clear(&mut self) {
-        HashMap::clear(self)
+        self.clear()
     }
 
-    fn entry(&mut self, key: K) -> Self::Entry<'_> {
-        HashMap::entry(self, key)
+    fn entry(&mut self, key: K) -> Entry<Self::OccupiedEntry<'_>, Self::VacantEntry<'_>> {
+        match HashMap::entry(self, key) {
+            hash_map::Entry::Occupied(r) => Occupied(r),
+            hash_map::Entry::Vacant(r) => Vacant(r),
+        }
     }
 
     fn insert(&mut self, key: K, value: V) -> Option<V> {
-        HashMap::insert(self, key, value)
+        self.insert(key, value)
     }
 
     fn contains_key(&self, key: &Q) -> bool {
-        HashMap::contains_key(self, key)
+        self.contains_key(key)
     }
 
     fn get(&self, key: &Q) -> Option<&V> {
-        HashMap::get(self, key)
+        self.get(key)
     }
 
     fn get_mut(&mut self, key: &Q) -> Option<&mut V> {
-        HashMap::get_mut(self, key)
+        self.get_mut(key)
     }
 
     fn get_key_value(&self, key: &Q) -> Option<(&K, &V)> {
-        HashMap::get_key_value(self, key)
+        self.get_key_value(key)
     }
 
     fn get_disjoint_mut<const N: usize>(&mut self, ks: [&Q; N]) -> [Option<&mut V>; N] {
-        HashMap::get_disjoint_mut(self, ks)
+        self.get_disjoint_mut(ks)
     }
 
     fn remove(&mut self, key: &Q) -> Option<V> {
-        HashMap::remove(self, key)
+        self.remove(key)
     }
 
     fn remove_entry(&mut self, key: &Q) -> Option<(K, V)> {
-        HashMap::remove_entry(self, key)
+        self.remove_entry(key)
     }
 
     fn iter(&self) -> Self::Iter<'_> {
-        HashMap::iter(self)
+        self.iter()
     }
 
     fn iter_mut(&mut self) -> Self::IterMut<'_> {
-        HashMap::iter_mut(self)
+        self.iter_mut()
     }
 
     fn keys(&self) -> Self::Keys<'_> {
-        HashMap::keys(self)
+        self.keys()
     }
 
     fn values(&self) -> Self::Values<'_> {
-        HashMap::values(self)
+        self.values()
     }
 
     fn values_mut(&mut self) -> Self::ValuesMut<'_> {
-        HashMap::values_mut(self)
+        self.values_mut()
     }
 
     fn into_keys(self) -> Self::IntoKeys {
-        HashMap::into_keys(self)
+        self.into_keys()
     }
 
     fn into_values(self) -> Self::IntoValues {
-        HashMap::into_values(self)
+        self.into_values()
     }
 }
-impl<K, V> MapEntry<K, V> for btree_map::Entry<'_, K, V> {
 
+impl<'a, K, V> OccupiedEntry<'a, K, V> for btree_map::OccupiedEntry<'a, K, V>
+where
+    K: Ord,
+{
+    fn key(&self) -> &K {
+        self.key()
+    }
+
+    fn remove_entry(self) -> (K, V) {
+        self.remove_entry()
+    }
+
+    fn get(&self) -> &V {
+        self.get()
+    }
+
+    fn get_mut(&mut self) -> &mut V {
+        self.get_mut()
+    }
+
+    fn into_mut(self) -> &'a mut V {
+        self.into_mut()
+    }
+
+    fn insert(&mut self, value: V) -> V {
+        self.insert(value)
+    }
+
+    fn remove(self) -> V {
+        self.remove()
+    }
+}
+impl<'a, K, V> VacantEntry<'a, K, V> for btree_map::VacantEntry<'a, K, V>
+where
+    K: Ord,
+{
+    type Occupied = btree_map::OccupiedEntry<'a, K, V>;
+
+    fn key(&self) -> &K {
+        self.key()
+    }
+
+    fn into_key(self) -> K {
+        self.into_key()
+    }
+
+    fn insert(self, value: V) -> &'a mut V {
+        self.insert(value)
+    }
+
+    fn insert_entry(self, value: V) -> Self::Occupied {
+        self.insert_entry(value)
+    }
 }
 impl<K, V, Q: ?Sized> Map<K, V, Q> for BTreeMap<K, V>
 where
@@ -220,7 +358,11 @@ where
     K: Borrow<Q>,
     Q: Ord,
 {
-    type Entry<'a> = btree_map::Entry<'a, K, V>
+    type OccupiedEntry<'a> = btree_map::OccupiedEntry<'a, K, V>
+    where
+        K: 'a,
+        V: 'a;
+    type VacantEntry<'a> = btree_map::VacantEntry<'a, K, V>
     where
         K: 'a,
         V: 'a;
@@ -255,39 +397,42 @@ where
     type IntoValues = btree_map::IntoValues<K, V>;
 
     fn len(&self) -> usize {
-        BTreeMap::len(self)
+        self.len()
     }
 
     fn is_empty(&self) -> bool {
-        BTreeMap::is_empty(self)
+        self.is_empty()
     }
 
     fn clear(&mut self) {
-        BTreeMap::clear(self)
+        self.clear()
     }
 
-    fn entry(&mut self, key: K) -> Self::Entry<'_> {
-        BTreeMap::entry(self, key)
+    fn entry(&mut self, key: K) -> Entry<Self::OccupiedEntry<'_>, Self::VacantEntry<'_>> {
+        match BTreeMap::entry(self, key) {
+            btree_map::Entry::Occupied(r) => Occupied(r),
+            btree_map::Entry::Vacant(r) => Vacant(r),
+        }
     }
 
     fn insert(&mut self, key: K, value: V) -> Option<V> {
-        BTreeMap::insert(self, key, value)
+        self.insert(key, value)
     }
 
     fn contains_key(&self, key: &Q) -> bool {
-        BTreeMap::contains_key(self, key)
+        self.contains_key(key)
     }
 
     fn get(&self, key: &Q) -> Option<&V> {
-        BTreeMap::get(self, key)
+        self.get(key)
     }
 
     fn get_mut(&mut self, key: &Q) -> Option<&mut V> {
-        BTreeMap::get_mut(self, key)
+        self.get_mut(key)
     }
 
     fn get_key_value(&self, key: &Q) -> Option<(&K, &V)> {
-        BTreeMap::get_key_value(self, key)
+        self.get_key_value(key)
     }
 
     fn get_disjoint_mut<const N: usize>(&mut self, ks: [&Q; N]) -> [Option<&mut V>; N] {
@@ -295,39 +440,39 @@ where
     }
 
     fn remove(&mut self, key: &Q) -> Option<V> {
-        BTreeMap::remove(self, key)
+        self.remove(key)
     }
 
     fn remove_entry(&mut self, key: &Q) -> Option<(K, V)> {
-        BTreeMap::remove_entry(self, key)
+        self.remove_entry(key)
     }
 
     fn iter(&self) -> Self::Iter<'_> {
-        BTreeMap::iter(self)
+        self.iter()
     }
 
     fn iter_mut(&mut self) -> Self::IterMut<'_> {
-        BTreeMap::iter_mut(self)
+        self.iter_mut()
     }
 
     fn keys(&self) -> Self::Keys<'_> {
-        BTreeMap::keys(self)
+        self.keys()
     }
 
     fn values(&self) -> Self::Values<'_> {
-        BTreeMap::values(self)
+        self.values()
     }
 
     fn values_mut(&mut self) -> Self::ValuesMut<'_> {
-        BTreeMap::values_mut(self)
+        self.values_mut()
     }
 
     fn into_keys(self) -> Self::IntoKeys {
-        BTreeMap::into_keys(self)
+        self.into_keys()
     }
 
     fn into_values(self) -> Self::IntoValues {
-        BTreeMap::into_values(self)
+        self.into_values()
     }
 }
 unsafe fn unsafe_get_disjoint_mut<'s, K, V, Q: ?Sized, S: Map<K, V, Q>, const N: usize>(s: &'s mut S, ks: [&Q; N]) -> [Option<&'s mut V>; N] {
@@ -341,4 +486,75 @@ unsafe fn unsafe_get_disjoint_mut<'s, K, V, Q: ?Sized, S: Map<K, V, Q>, const N:
         }
         return None;
     })
+}
+
+pub trait EntryImpl<'a, K, V, Occupied: OccupiedEntry<'a, K, V>, Vacant: VacantEntry<'a, K, V>> {
+    fn or_insert(self, default: V) -> &'a mut V;
+
+    fn or_insert_with<F: FnOnce() -> V>(self, default: F) -> &'a mut V;
+
+    fn or_insert_with_key<F: FnOnce(&K) -> V>(self, default: F) -> &'a mut V;
+
+    fn key(&self) -> &K;
+
+    fn and_modify<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&mut V);
+
+    fn insert_entry(self, value: V) -> Occupied;
+}
+impl<'a, K, V, Occupied: OccupiedEntry<'a, K, V>, Vacant: VacantEntry<'a, K, V, Occupied = Occupied>> EntryImpl<'a, K, V, Occupied, Vacant> for Entry<Occupied, Vacant> {
+    fn or_insert(self, default: V) -> &'a mut V {
+        match self {
+            Occupied(entry) => entry.into_mut(),
+            Vacant(entry) => entry.insert(default),
+        }
+    }
+
+    fn or_insert_with<F: FnOnce() -> V>(self, default: F) -> &'a mut V {
+        match self {
+            Occupied(entry) => entry.into_mut(),
+            Vacant(entry) => entry.insert(default()),
+        }
+    }
+
+    fn or_insert_with_key<F: FnOnce(&K) -> V>(self, default: F) -> &'a mut V {
+        match self {
+            Occupied(entry) => entry.into_mut(),
+            Vacant(entry) => {
+                let value = default(entry.key());
+                entry.insert(value)
+            }
+        }
+    }
+
+    fn key(&self) -> &K {
+        match *self {
+            Occupied(ref entry) => entry.key(),
+            Vacant(ref entry) => entry.key(),
+        }
+    }
+
+    fn and_modify<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&mut V),
+    {
+        match self {
+            Occupied(mut entry) => {
+                f(entry.get_mut());
+                Occupied(entry)
+            }
+            Vacant(entry) => Vacant(entry),
+        }
+    }
+
+    fn insert_entry(self, value: V) -> Occupied {
+        match self {
+            Occupied(mut entry) => {
+                entry.insert(value);
+                entry
+            }
+            Vacant(entry) => entry.insert_entry(value),
+        }
+    }
 }

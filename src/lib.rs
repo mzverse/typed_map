@@ -1,4 +1,4 @@
-mod map;
+pub mod map;
 
 use std::any::{Any, TypeId};
 use std::cmp::Ordering;
@@ -30,16 +30,10 @@ pub trait Key<T: Sized>: Any {
 }
 
 // impl
-pub struct TypedMap<Type: MapType, K: ?Sized + Any = dyn KeyDataHash<DefaultHasher>, M = HashMap<Box<K>, Box<dyn Any>>> {
-    inner: M,
-    _marker: PhantomData<(Type, K)>,
-}
+pub struct TypedMap<Type: MapType, K: ?Sized + Any = dyn KeyDataHash<DefaultHasher>, M = HashMap<Box<K>, Box<dyn Any>>> (M, PhantomData<(Type, K)>);
 impl<Type: MapType, K: ?Sized + Any, M> TypedMap<Type, K, M> {
     pub fn with_inner(inner: M) -> Self {
-        Self {
-            inner,
-            _marker: PhantomData,
-        }
+        Self(inner, PhantomData)
     }
 }
 
@@ -65,49 +59,49 @@ where
     M: Map<Box<K>, Box<dyn Any>, K>,
 {
     fn len(&self) -> usize {
-        self.inner.len()
+        self.0.len()
     }
 
     fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.0.is_empty()
     }
 
     fn insert(&mut self, key: Type::Key<T>, value: Type::Value<T>) -> Option<Type::Value<T>> {
-        self.inner.insert(K::new(key), Box::new(value) as Box<dyn Any>)
+        self.0.insert(K::new(key), Box::new(value) as Box<dyn Any>)
             .map(|boxed| *boxed.downcast().unwrap())
     }
 
     fn contains_key(&self, key: &Type::Key<T>) -> bool {
-        self.inner
+        self.0
             .contains_key(Key::borrow(key))
     }
 
     fn get(&self, key: &Type::Key<T>) -> Option<&Type::Value<T>> {
-        self.inner
+        self.0
             .get(Key::borrow(key))
             .map(|boxed| boxed.downcast_ref().unwrap())
     }
 
     fn get_mut(&mut self, key: &Type::Key<T>) -> Option<&mut Type::Value<T>> {
-        self.inner
+        self.0
             .get_mut(Key::borrow(key))
             .map(|boxed| boxed.downcast_mut().unwrap())
     }
 
     fn get_disjoint_mut<const N: usize>(&mut self, ks: [&Type::Key<T>; N]) -> [Option<&mut Type::Value<T>>; N] {
-        self.inner.get_disjoint_mut(ks.map(Key::borrow))
+        self.0.get_disjoint_mut(ks.map(Key::borrow))
             .map(|it|
                 it.map(|boxed| boxed.downcast_mut().unwrap()))
     }
 
     fn remove(&mut self, key: &Type::Key<T>) -> Option<Type::Value<T>> {
-        self.inner
+        self.0
             .remove(Key::borrow(key))
             .map(|boxed| *boxed.downcast().unwrap())
     }
 
     fn remove_entry(&mut self, key: &Type::Key<T>) -> Option<(Type::Key<T>, Type::Value<T>)> {
-        self.inner
+        self.0
             .remove_entry(Key::borrow(key))
             .map(|(k, v)| (*k.into_any().downcast().unwrap(), *v.downcast().unwrap()))
     }
@@ -117,31 +111,31 @@ where
     M: Map<Box<K>, Box<dyn Any>, K>,
 {
     pub fn iter(&self) -> impl Iterator<Item = (&K, &dyn Any)> {
-        self.inner.iter().map(|(k, v)| (k.as_ref(), v.as_ref()))
+        self.0.iter().map(|(k, v)| (k.as_ref(), v.as_ref()))
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&K, &mut dyn Any)> {
-        self.inner.iter_mut().map(|(k, v)| (k.as_ref(), v.as_mut()))
+        self.0.iter_mut().map(|(k, v)| (k.as_ref(), v.as_mut()))
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &K> {
-        self.inner.keys().map(Box::as_ref)
+        self.0.keys().map(Box::as_ref)
     }
 
     pub fn values(&self) -> impl Iterator<Item = &dyn Any> {
-        self.inner.values().map(Box::as_ref)
+        self.0.values().map(Box::as_ref)
     }
 
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut dyn Any> {
-        self.inner.values_mut().map(Box::as_mut)
+        self.0.values_mut().map(Box::as_mut)
     }
 
     pub fn into_keys(self) -> impl Iterator<Item = Box<K>> {
-        self.inner.into_keys()
+        self.0.into_keys()
     }
 
     pub fn into_values(self) -> impl Iterator<Item = Box<dyn Any>> {
-        self.inner.into_values()
+        self.0.into_values()
     }
 }
 impl<Type: MapType, K: ?Sized + Any, M> IntoIterator for TypedMap<Type, K, M>
@@ -152,7 +146,7 @@ where
     type IntoIter = M::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.inner.into_iter()
+        self.0.into_iter()
     }
 }
 
@@ -282,10 +276,7 @@ impl<T: KeyDataOrd> Key<T> for dyn KeyDataOrd {
 impl<Type: MapType> TypedMap<Type, dyn KeyDataOrd, BTreeMap<Box<dyn KeyDataOrd>, Box<dyn Any>>>
 {
     pub fn new() -> Self {
-        Self {
-            inner: BTreeMap::new(),
-            _marker: PhantomData,
-        }
+        Self::with_inner(BTreeMap::new())
     }
 }
 
