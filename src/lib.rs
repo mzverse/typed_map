@@ -30,6 +30,7 @@ pub trait Key<T: Sized>: Any {
 }
 
 // impl
+#[derive(Clone, Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TypedMap<Type: MapType, K: ?Sized + Any = dyn KeyDataHash<DefaultHasher>, M = HashMap<Box<K>, Box<dyn Any>>> (M, PhantomData<(Type, K)>);
 impl<Type: MapType, K: ?Sized + Any, M> TypedMap<Type, K, M> {
     pub fn with_inner(inner: M) -> Self {
