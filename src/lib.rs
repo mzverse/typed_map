@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, DefaultHasher, Hash, Hasher};
 use std::marker::PhantomData;
-use crate::map::{Entry, Map};
+use crate::map::{Entry, MapQuery};
 
 
 // // util
@@ -40,14 +40,14 @@ impl<Type: MapType, K: ?Sized + Any, M> TypedMap<Type, K, M> {
 
 pub struct OccupiedEntry<'a, Type: MapType, T, K: ?Sized + Any, M>(M::OccupiedEntry<'a>, PhantomData<(Type, T, K)>)
 where
-    M: Map<Box<K>, Box<dyn Any>, K> + 'a;
+    M: MapQuery<Box<K>, Box<dyn Any>, K> + 'a;
 pub struct VacantEntry<'a, Type: MapType, T, K: ?Sized + Any, M>(M::VacantEntry<'a>, PhantomData<(Type, T, K)>)
 where
-    M: Map<Box<K>, Box<dyn Any>, K> + 'a;
+    M: MapQuery<Box<K>, Box<dyn Any>, K> + 'a;
 
 impl<'a, Type: MapType, T, K: ?Sized + Any, M> map::OccupiedEntry<'a, Type::Key<T>, Type::Value<T>> for OccupiedEntry<'a, Type, T, K, M>
 where
-    M: Map<Box<K>, Box<dyn Any>, K> + 'a,
+    M: MapQuery<Box<K>, Box<dyn Any>, K> + 'a,
     K: Key<Type::Key<T>>,
     Type::Key<T>: 'static,
     Type::Value<T>: 'static,
@@ -83,7 +83,7 @@ where
 }
 impl<'a, Type: MapType, T, K: ?Sized + Any, M> map::VacantEntry<'a, Type::Key<T>, Type::Value<T>> for VacantEntry<'a, Type, T, K, M>
 where
-    M: Map<Box<K>, Box<dyn Any>, K> + 'a,
+    M: MapQuery<Box<K>, Box<dyn Any>, K> + 'a,
     K: Key<Type::Key<T>>,
     Type::Key<T>: 'static,
     Type::Value<T>: 'static,
@@ -109,7 +109,7 @@ where
 
 pub trait Impl<Type: MapType, T, K: ?Sized + Any, M>
 where
-    M: Map<Box<K>, Box<dyn Any>, K>,
+    M: MapQuery<Box<K>, Box<dyn Any>, K>,
 {
     fn entry(&mut self, key: Type::Key<T>) -> Entry<OccupiedEntry<'_, Type, T, K, M>, VacantEntry<'_, Type, T, K, M>>;
     fn insert(&mut self, key: Type::Key<T>, value: Type::Value<T>) -> Option<Type::Value<T>>;
@@ -124,7 +124,7 @@ impl<Type: MapType, T, K: ?Sized + Key<Type::Key<T>>, M> Impl<Type, T, K, M> for
 where
     Type::Key<T>: 'static,
     Type::Value<T>: 'static,
-    M: Map<Box<K>, Box<dyn Any>, K>,
+    M: MapQuery<Box<K>, Box<dyn Any>, K>,
 {
     fn entry(&mut self, key: Type::Key<T>) -> Entry<OccupiedEntry<'_, Type, T, K, M>, VacantEntry<'_, Type, T, K, M>> {
         match self.0.entry(K::new(key)) {
@@ -175,7 +175,7 @@ where
 }
 impl<Type: MapType, K: ?Sized + Any, M> TypedMap<Type, K, M>
 where
-    M: Map<Box<K>, Box<dyn Any>, K>,
+    M: MapQuery<Box<K>, Box<dyn Any>, K>,
 {
     pub fn len(&self) -> usize {
         self.0.len()
@@ -219,7 +219,7 @@ where
 }
 impl<Type: MapType, K: ?Sized + Any, M> IntoIterator for TypedMap<Type, K, M>
 where
-    M: Map<Box<K>, Box<dyn Any>, K>,
+    M: MapQuery<Box<K>, Box<dyn Any>, K>,
 {
     type Item = (Box<K>, Box<dyn Any>);
     type IntoIter = M::IntoIter;
@@ -273,11 +273,11 @@ impl<H: Hasher + 'static, T: KeyDataHash<H>> Key<T> for dyn KeyDataHash<H> {
         Box::new(data)
     }
 
-    fn borrow(data: &T) -> &dyn KeyDataHash<H> {
+    fn borrow(data: &T) -> &Self {
         data
     }
 
-    fn into_any(self: Box<dyn KeyDataHash<H>>) -> Box<dyn Any> {
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }
 
@@ -402,7 +402,7 @@ mod tests {
         let option;
         {
             let id = MyTypeId::<i32>(PhantomData);
-            option = map.get(&&id);
+            option = map.get(&id);
         }
         if let Some(val) = option {
             println!("Got i32 vec: {:?}", val);

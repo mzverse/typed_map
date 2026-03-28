@@ -33,7 +33,7 @@ pub enum Entry<Occupied, Vacant> {
     Vacant(Vacant),
 }
 use Entry::*;
-pub trait Map<K, V, Q: ?Sized>: IntoIterator<Item=(K, V)>
+pub trait Map<K, V>: IntoIterator<Item=(K, V)>
 {
     type OccupiedEntry<'a>: OccupiedEntry<'a, K, V>
     where
@@ -90,20 +90,6 @@ pub trait Map<K, V, Q: ?Sized>: IntoIterator<Item=(K, V)>
 
     fn insert(&mut self, key: K, value: V) -> Option<V>;
 
-    fn contains_key(&self, key: &Q) -> bool;
-
-    fn get(&self, key: &Q) -> Option<&V>;
-
-    fn get_mut(&mut self, key: &Q) -> Option<&mut V>;
-
-    fn get_key_value(&self, key: &Q) -> Option<(&K, &V)>;
-
-    fn get_disjoint_mut<const N: usize>(&mut self, ks: [&Q; N]) -> [Option<&mut V>; N];
-
-    fn remove(&mut self, key: &Q) -> Option<V>;
-
-    fn remove_entry(&mut self, key: &Q) -> Option<(K, V)>;
-
     fn iter(&self) -> Self::Iter<'_>;
 
     fn iter_mut(&mut self) -> Self::IterMut<'_>;
@@ -117,6 +103,21 @@ pub trait Map<K, V, Q: ?Sized>: IntoIterator<Item=(K, V)>
     fn into_keys(self) -> Self::IntoKeys;
 
     fn into_values(self) -> Self::IntoValues;
+}
+pub trait MapQuery<K, V, Q: ?Sized>: Map<K, V> {
+    fn contains_key(&self, key: &Q) -> bool;
+
+    fn get(&self, key: &Q) -> Option<&V>;
+
+    fn get_mut(&mut self, key: &Q) -> Option<&mut V>;
+
+    fn get_key_value(&self, key: &Q) -> Option<(&K, &V)>;
+
+    fn get_disjoint_mut<const N: usize>(&mut self, ks: [&Q; N]) -> [Option<&mut V>; N];
+
+    fn remove(&mut self, key: &Q) -> Option<V>;
+
+    fn remove_entry(&mut self, key: &Q) -> Option<(K, V)>;
 }
 impl<'a, K, V> OccupiedEntry<'a, K, V> for hash_map::OccupiedEntry<'a, K, V> {
     fn key(&self) -> &K {
@@ -166,12 +167,10 @@ impl<'a, K, V> VacantEntry<'a, K, V> for hash_map::VacantEntry<'a, K, V> {
         self.insert_entry(value)
     }
 }
-impl<K, V, Q: ?Sized, S> Map<K, V, Q> for HashMap<K, V, S>
+impl<K, V, S> Map<K, V> for HashMap<K, V, S>
 where
     K: Eq + Hash,
     S: BuildHasher,
-    K: Borrow<Q>,
-    Q: Eq + Hash,
 {
     type OccupiedEntry<'a> = hash_map::OccupiedEntry<'a, K, V>
     where
@@ -241,34 +240,6 @@ where
         self.insert(key, value)
     }
 
-    fn contains_key(&self, key: &Q) -> bool {
-        self.contains_key(key)
-    }
-
-    fn get(&self, key: &Q) -> Option<&V> {
-        self.get(key)
-    }
-
-    fn get_mut(&mut self, key: &Q) -> Option<&mut V> {
-        self.get_mut(key)
-    }
-
-    fn get_key_value(&self, key: &Q) -> Option<(&K, &V)> {
-        self.get_key_value(key)
-    }
-
-    fn get_disjoint_mut<const N: usize>(&mut self, ks: [&Q; N]) -> [Option<&mut V>; N] {
-        self.get_disjoint_mut(ks)
-    }
-
-    fn remove(&mut self, key: &Q) -> Option<V> {
-        self.remove(key)
-    }
-
-    fn remove_entry(&mut self, key: &Q) -> Option<(K, V)> {
-        self.remove_entry(key)
-    }
-
     fn iter(&self) -> Self::Iter<'_> {
         self.iter()
     }
@@ -295,6 +266,42 @@ where
 
     fn into_values(self) -> Self::IntoValues {
         self.into_values()
+    }
+}
+
+impl<K, V, Q: ?Sized, S> MapQuery<K, V, Q> for HashMap<K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher,
+    K: Borrow<Q>,
+    Q: Eq + Hash,
+{
+    fn contains_key(&self, key: &Q) -> bool {
+        self.contains_key(key)
+    }
+
+    fn get(&self, key: &Q) -> Option<&V> {
+        self.get(key)
+    }
+
+    fn get_mut(&mut self, key: &Q) -> Option<&mut V> {
+        self.get_mut(key)
+    }
+
+    fn get_key_value(&self, key: &Q) -> Option<(&K, &V)> {
+        self.get_key_value(key)
+    }
+
+    fn get_disjoint_mut<const N: usize>(&mut self, ks: [&Q; N]) -> [Option<&mut V>; N] {
+        self.get_disjoint_mut(ks)
+    }
+
+    fn remove(&mut self, key: &Q) -> Option<V> {
+        self.remove(key)
+    }
+
+    fn remove_entry(&mut self, key: &Q) -> Option<(K, V)> {
+        self.remove_entry(key)
     }
 }
 
@@ -352,11 +359,9 @@ where
         self.insert_entry(value)
     }
 }
-impl<K, V, Q: ?Sized> Map<K, V, Q> for BTreeMap<K, V>
+impl<K, V> Map<K, V> for BTreeMap<K, V>
 where
     K: Ord,
-    K: Borrow<Q>,
-    Q: Ord,
 {
     type OccupiedEntry<'a> = btree_map::OccupiedEntry<'a, K, V>
     where
@@ -419,34 +424,6 @@ where
         self.insert(key, value)
     }
 
-    fn contains_key(&self, key: &Q) -> bool {
-        self.contains_key(key)
-    }
-
-    fn get(&self, key: &Q) -> Option<&V> {
-        self.get(key)
-    }
-
-    fn get_mut(&mut self, key: &Q) -> Option<&mut V> {
-        self.get_mut(key)
-    }
-
-    fn get_key_value(&self, key: &Q) -> Option<(&K, &V)> {
-        self.get_key_value(key)
-    }
-
-    fn get_disjoint_mut<const N: usize>(&mut self, ks: [&Q; N]) -> [Option<&mut V>; N] {
-        unsafe { unsafe_get_disjoint_mut(self, ks) }
-    }
-
-    fn remove(&mut self, key: &Q) -> Option<V> {
-        self.remove(key)
-    }
-
-    fn remove_entry(&mut self, key: &Q) -> Option<(K, V)> {
-        self.remove_entry(key)
-    }
-
     fn iter(&self) -> Self::Iter<'_> {
         self.iter()
     }
@@ -475,7 +452,41 @@ where
         self.into_values()
     }
 }
-unsafe fn unsafe_get_disjoint_mut<'s, K, V, Q: ?Sized, S: Map<K, V, Q>, const N: usize>(s: &'s mut S, ks: [&Q; N]) -> [Option<&'s mut V>; N] {
+impl<K, V, Q: ?Sized> MapQuery<K, V, Q> for BTreeMap<K, V>
+where
+    K: Ord,
+    K: Borrow<Q>,
+    Q: Ord,
+{
+    fn contains_key(&self, key: &Q) -> bool {
+        self.contains_key(key)
+    }
+
+    fn get(&self, key: &Q) -> Option<&V> {
+        self.get(key)
+    }
+
+    fn get_mut(&mut self, key: &Q) -> Option<&mut V> {
+        self.get_mut(key)
+    }
+
+    fn get_key_value(&self, key: &Q) -> Option<(&K, &V)> {
+        self.get_key_value(key)
+    }
+
+    fn get_disjoint_mut<const N: usize>(&mut self, ks: [&Q; N]) -> [Option<&mut V>; N] {
+        unsafe { unsafe_get_disjoint_mut(self, ks) }
+    }
+
+    fn remove(&mut self, key: &Q) -> Option<V> {
+        self.remove(key)
+    }
+
+    fn remove_entry(&mut self, key: &Q) -> Option<(K, V)> {
+        self.remove_entry(key)
+    }
+}
+unsafe fn unsafe_get_disjoint_mut<'s, K, V, Q: ?Sized, S: MapQuery<K, V, Q>, const N: usize>(s: &'s mut S, ks: [&Q; N]) -> [Option<&'s mut V>; N] {
     let mut set = HashSet::<*mut V>::with_capacity(N);
     ks.map(|k| {
         let r = unsafe { std::mem::transmute::<&mut S, &mut S>(s) }.get_mut(k);
