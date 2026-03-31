@@ -1,10 +1,18 @@
+#![cfg_attr(all(feature = "no_std", not(test)), no_std)]
+
+extern crate alloc;
+
 pub mod map;
 
-use std::any::{Any, TypeId};
-use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
-use std::hash::{BuildHasher, DefaultHasher, Hash, Hasher};
-use std::marker::PhantomData;
+use core::any::{Any, TypeId};
+use core::cmp::Ordering;
+#[allow(unused_imports)]
+use core::hash::{Hash, Hasher, BuildHasher};
+
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use core::marker::PhantomData;
+
 use crate::map::{Entry, MapQuery};
 
 
@@ -30,8 +38,22 @@ pub trait Key<T: Sized>: Any {
 }
 
 // impl
-#[derive(Clone, Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TypedMap<Type: MapType, K: ?Sized + Any = dyn KeyDataHash<DefaultHasher>, M = HashMap<Box<K>, Box<dyn Any>>> (M, PhantomData<(Type, K)>);
+macro_rules! define {
+    () => {
+        #[derive(Clone, Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+        pub struct TypedMap<Type: MapType, K: ?Sized + Any, M> (M, PhantomData<(Type, K)>);
+    };
+    ($($DefaultHasher: ident)::+, $($HashMap: ident)::+) => {
+        #[derive(Clone, Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+        pub struct TypedMap<Type: MapType, K: ?Sized + Any = dyn KeyDataHash<$($DefaultHasher)::+>, M = $($HashMap)::+<Box<K>, Box<dyn Any>>> (M, PhantomData<(Type, K)>);
+    };
+}
+#[cfg(feature = "hashbrown")]
+define!(hashbrown::DefaultHasher, hashbrown::HashMap);
+#[cfg(all(not(feature = "hashbrown"), not(feature = "no_std")))]
+define!(std::hash::DefaultHasher, std::collections::HashMap);
+#[cfg(all(not(feature = "hashbrown"), feature = "no_std"))]
+define!();
 impl<Type: MapType, K: ?Sized + Any, M> TypedMap<Type, K, M> {
     pub fn with_inner(inner: M) -> Self {
         Self(inner, PhantomData)
@@ -139,19 +161,16 @@ where
     }
 
     fn contains_key(&self, key: &Type::Key<T>) -> bool {
-        self.0
-            .contains_key(Key::borrow(key))
+        self.0.contains_key(Key::borrow(key))
     }
 
     fn get(&self, key: &Type::Key<T>) -> Option<&Type::Value<T>> {
-        self.0
-            .get(Key::borrow(key))
+        self.0.get(Key::borrow(key))
             .map(|boxed| boxed.downcast_ref().unwrap())
     }
 
     fn get_mut(&mut self, key: &Type::Key<T>) -> Option<&mut Type::Value<T>> {
-        self.0
-            .get_mut(Key::borrow(key))
+        self.0.get_mut(Key::borrow(key))
             .map(|boxed| boxed.downcast_mut().unwrap())
     }
 
@@ -168,8 +187,7 @@ where
     }
 
     fn remove_entry(&mut self, key: &Type::Key<T>) -> Option<(Type::Key<T>, Type::Value<T>)> {
-        self.0
-            .remove_entry(Key::borrow(key))
+        self.0.remove_entry(Key::borrow(key))
             .map(|(k, v)| (*k.into_any().downcast().unwrap(), *v.downcast().unwrap()))
     }
 }
@@ -230,6 +248,28 @@ where
 }
 
 // hash
+#[allow(unused_macros)]
+macro_rules! for_hash {
+    ($($DefaultHasher: ident)::+, $($HashMap: ident)::+) => {
+        impl<Type: MapType> TypedMap<Type, dyn KeyDataHash<$($DefaultHasher)::+>, $($HashMap)::+<Box<dyn KeyDataHash<$($DefaultHasher)::+>>, Box<dyn Any>>> {
+            pub fn new() -> Self {
+                Self::with_inner($($HashMap)::+::new())
+            }
+        }
+        impl<Type: MapType, S: BuildHasher> TypedMap<Type, dyn KeyDataHash<S::Hasher>, $($HashMap)::+<Box<dyn KeyDataHash<S::Hasher>>, Box<dyn Any>, S>>
+        where
+            S::Hasher: 'static
+        {
+            pub fn with_hasher(hash_builder: S) -> Self {
+                Self::with_inner($($HashMap)::+::with_hasher(hash_builder))
+            }
+        }
+    };
+}
+#[cfg(feature = "hashbrown")]
+for_hash!(hashbrown::DefaultHasher, hashbrown::HashMap);
+#[cfg(not(feature = "no_std"))]
+for_hash!(std::hash::DefaultHasher, std::collections::HashMap);
 trait DynHash<H: Hasher> {
     fn hash(&self, state: &mut H);
 }
@@ -283,20 +323,6 @@ impl<H: Hasher + 'static, T: KeyDataHash<H>> Key<T> for dyn KeyDataHash<H> {
 
     fn as_any(&self) -> &dyn Any {
         self
-    }
-}
-
-impl<Type: MapType> TypedMap<Type> {
-    pub fn new() -> Self {
-        Self::with_inner(HashMap::new())
-    }
-}
-impl<Type: MapType, S: BuildHasher> TypedMap<Type, dyn KeyDataHash<S::Hasher>, HashMap<Box<dyn KeyDataHash<S::Hasher>>, Box<dyn Any>, S>>
-where
-    S::Hasher: 'static
-{
-    pub fn with_hasher(hash_builder: S) -> Self {
-        Self::with_inner(HashMap::with_hasher(hash_builder))
     }
 }
 
@@ -359,13 +385,22 @@ impl<Type: MapType> TypedMap<Type, dyn KeyDataOrd, BTreeMap<Box<dyn KeyDataOrd>,
     }
 }
 
+// fuck RustRover
+#[cfg(test)]
+extern crate std;
+
 #[cfg(test)]
 mod tests {
+    use std::println;
+    use alloc::string::{String, ToString};
+    use alloc::vec;
+    use alloc::vec::Vec;
     use crate::*;
-    use std::cmp::Ordering;
-    use std::hash::{Hash, Hasher};
-    use std::marker::PhantomData;
+    use core::cmp::Ordering;
+    use core::hash::{Hash, Hasher};
+    use core::marker::PhantomData;
 
+    #[cfg(any(feature = "hashbrown", not(feature = "no_std")))]
     #[test]
     fn test_hash() {
         pub struct MyTypeId<T>(PhantomData<T>);

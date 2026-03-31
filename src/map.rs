@@ -1,6 +1,7 @@
-use std::borrow::Borrow;
-use std::collections::{btree_map, hash_map, BTreeMap, HashMap, HashSet};
-use std::hash::{BuildHasher, Hash};
+use alloc::collections::{btree_map, BTreeMap};
+use core::borrow::Borrow;
+#[allow(unused_imports)]
+use core::hash::{BuildHasher, Hash};
 
 pub trait OccupiedEntry<'a, K, V> {
     fn key(&self) -> &K;
@@ -119,191 +120,202 @@ pub trait MapQuery<K, V, Q: ?Sized>: Map<K, V> {
 
     fn remove_entry(&mut self, key: &Q) -> Option<(K, V)>;
 }
-impl<'a, K, V> OccupiedEntry<'a, K, V> for hash_map::OccupiedEntry<'a, K, V> {
-    fn key(&self) -> &K {
-        self.key()
-    }
 
-    fn remove_entry(self) -> (K, V) {
-        self.remove_entry()
-    }
+#[allow(unused_macros)]
+macro_rules! for_hash {
+    ($($hash_map:ident)::+, <$($EntryArgs:tt $(: $con:path)?),+>) => {
+        impl<'a, $($EntryArgs $(: $con)?),+> OccupiedEntry<'a, K, V> for $($hash_map)::+::OccupiedEntry<'a, $($EntryArgs),*> {
+            fn key(&self) -> &K {
+                self.key()
+            }
 
-    fn get(&self) -> &V {
-        self.get()
-    }
+            fn remove_entry(self) -> (K, V) {
+                self.remove_entry()
+            }
 
-    fn get_mut(&mut self) -> &mut V {
-        self.get_mut()
-    }
+            fn get(&self) -> &V {
+                self.get()
+            }
 
-    fn into_mut(self) -> &'a mut V {
-        self.into_mut()
-    }
+            fn get_mut(&mut self) -> &mut V {
+                self.get_mut()
+            }
 
-    fn insert(&mut self, value: V) -> V {
-        self.insert(value)
-    }
+            fn into_mut(self) -> &'a mut V {
+                self.into_mut()
+            }
 
-    fn remove(self) -> V {
-        self.remove()
-    }
-}
-impl<'a, K, V> VacantEntry<'a, K, V> for hash_map::VacantEntry<'a, K, V> {
-    type Occupied = hash_map::OccupiedEntry<'a, K, V>;
+            fn insert(&mut self, value: V) -> V {
+                self.insert(value)
+            }
 
-    fn key(&self) -> &K {
-        self.key()
-    }
-
-    fn into_key(self) -> K {
-        self.into_key()
-    }
-
-    fn insert(self, value: V) -> &'a mut V {
-        self.insert(value)
-    }
-
-    fn insert_entry(self, value: V) -> Self::Occupied {
-        self.insert_entry(value)
-    }
-}
-impl<K, V, S> Map<K, V> for HashMap<K, V, S>
-where
-    K: Eq + Hash,
-    S: BuildHasher,
-{
-    type OccupiedEntry<'a> = hash_map::OccupiedEntry<'a, K, V>
-    where
-        K: 'a,
-        V: 'a,
-        S: 'a;
-    type VacantEntry<'a> = hash_map::VacantEntry<'a, K, V>
-    where
-        K: 'a,
-        V: 'a,
-        S: 'a;
-
-    type Iter<'a> = hash_map::Iter<'a, K, V>
-    where
-        K: 'a,
-        V: 'a,
-        S: 'a;
-
-    type IterMut<'a> = hash_map::IterMut<'a, K, V>
-    where
-        K: 'a,
-        V: 'a,
-        S: 'a;
-
-    type Keys<'a> = hash_map::Keys<'a, K, V>
-    where
-        K: 'a,
-        V: 'a,
-        S: 'a;
-
-    type Values<'a> = hash_map::Values<'a, K, V>
-    where
-        K: 'a,
-        V: 'a,
-        S: 'a;
-
-    type ValuesMut<'a> = hash_map::ValuesMut<'a, K, V>
-    where
-        K: 'a,
-        V: 'a,
-        S: 'a;
-
-    type IntoKeys = hash_map::IntoKeys<K, V>;
-
-    type IntoValues = hash_map::IntoValues<K, V>;
-
-    fn len(&self) -> usize {
-        self.len()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.is_empty()
-    }
-
-    fn clear(&mut self) {
-        self.clear()
-    }
-
-    fn entry(&mut self, key: K) -> Entry<Self::OccupiedEntry<'_>, Self::VacantEntry<'_>> {
-        match HashMap::entry(self, key) {
-            hash_map::Entry::Occupied(r) => Occupied(r),
-            hash_map::Entry::Vacant(r) => Vacant(r),
+            fn remove(self) -> V {
+                self.remove()
+            }
         }
-    }
+        impl<'a, $($EntryArgs $(: $con)?),+> VacantEntry<'a, K, V> for $($hash_map)::+::VacantEntry<'a, $($EntryArgs),*> {
+            type Occupied = $($hash_map)::+::OccupiedEntry<'a, $($EntryArgs),*>;
 
-    fn insert(&mut self, key: K, value: V) -> Option<V> {
-        self.insert(key, value)
-    }
+            fn key(&self) -> &K {
+                self.key()
+            }
 
-    fn iter(&self) -> Self::Iter<'_> {
-        self.iter()
-    }
+            fn into_key(self) -> K {
+                self.into_key()
+            }
 
-    fn iter_mut(&mut self) -> Self::IterMut<'_> {
-        self.iter_mut()
-    }
+            fn insert(self, value: V) -> &'a mut V {
+                self.insert(value)
+            }
 
-    fn keys(&self) -> Self::Keys<'_> {
-        self.keys()
-    }
+            fn insert_entry(self, value: V) -> Self::Occupied {
+                self.insert_entry(value)
+            }
+        }
+        impl<K, V, S> Map<K, V> for $($hash_map)::+::HashMap<K, V, S>
+        where
+            K: Eq + Hash,
+            S: core::hash::BuildHasher,
+        {
+            type OccupiedEntry<'a> = $($hash_map)::+::OccupiedEntry<'a, $($EntryArgs),*>
+            where
+                K: 'a,
+                V: 'a,
+                S: 'a;
+            type VacantEntry<'a> = $($hash_map)::+::VacantEntry<'a, $($EntryArgs),*>
+            where
+                K: 'a,
+                V: 'a,
+                S: 'a;
 
-    fn values(&self) -> Self::Values<'_> {
-        self.values()
-    }
+            type Iter<'a> = $($hash_map)::+::Iter<'a, K, V>
+            where
+                K: 'a,
+                V: 'a,
+                S: 'a;
 
-    fn values_mut(&mut self) -> Self::ValuesMut<'_> {
-        self.values_mut()
-    }
+            type IterMut<'a> = $($hash_map)::+::IterMut<'a, K, V>
+            where
+                K: 'a,
+                V: 'a,
+                S: 'a;
 
-    fn into_keys(self) -> Self::IntoKeys {
-        self.into_keys()
-    }
+            type Keys<'a> = $($hash_map)::+::Keys<'a, K, V>
+            where
+                K: 'a,
+                V: 'a,
+                S: 'a;
 
-    fn into_values(self) -> Self::IntoValues {
-        self.into_values()
-    }
+            type Values<'a> = $($hash_map)::+::Values<'a, K, V>
+            where
+                K: 'a,
+                V: 'a,
+                S: 'a;
+
+            type ValuesMut<'a> = $($hash_map)::+::ValuesMut<'a, K, V>
+            where
+                K: 'a,
+                V: 'a,
+                S: 'a;
+
+            type IntoKeys = $($hash_map)::+::IntoKeys<K, V>;
+
+            type IntoValues = $($hash_map)::+::IntoValues<K, V>;
+
+            fn len(&self) -> usize {
+                self.len()
+            }
+
+            fn is_empty(&self) -> bool {
+                self.is_empty()
+            }
+
+            fn clear(&mut self) {
+                self.clear()
+            }
+
+            fn entry(&mut self, key: K) -> Entry<Self::OccupiedEntry<'_>, Self::VacantEntry<'_>> {
+                match $($hash_map)::+::HashMap::entry(self, key) {
+                    $($hash_map)::+::Entry::Occupied(r) => Occupied(r),
+                    $($hash_map)::+::Entry::Vacant(r) => Vacant(r),
+                }
+            }
+
+            fn insert(&mut self, key: K, value: V) -> Option<V> {
+                self.insert(key, value)
+            }
+
+            fn iter(&self) -> Self::Iter<'_> {
+                self.iter()
+            }
+
+            fn iter_mut(&mut self) -> Self::IterMut<'_> {
+                self.iter_mut()
+            }
+
+            fn keys(&self) -> Self::Keys<'_> {
+                self.keys()
+            }
+
+            fn values(&self) -> Self::Values<'_> {
+                self.values()
+            }
+
+            fn values_mut(&mut self) -> Self::ValuesMut<'_> {
+                self.values_mut()
+            }
+
+            fn into_keys(self) -> Self::IntoKeys {
+                self.into_keys()
+            }
+
+            fn into_values(self) -> Self::IntoValues {
+                self.into_values()
+            }
+        }
+        impl<K, V, Q: ?Sized, S> MapQuery<K, V, Q> for $($hash_map)::+::HashMap<K, V, S>
+        where
+            K: Eq + Hash,
+            S: core::hash::BuildHasher,
+            K: Borrow<Q>,
+            Q: Eq + Hash,
+        {
+            fn contains_key(&self, key: &Q) -> bool {
+                self.contains_key(key)
+            }
+
+            fn get(&self, key: &Q) -> Option<&V> {
+                self.get(key)
+            }
+
+            fn get_mut(&mut self, key: &Q) -> Option<&mut V> {
+                self.get_mut(key)
+            }
+
+            fn get_key_value(&self, key: &Q) -> Option<(&K, &V)> {
+                self.get_key_value(key)
+            }
+
+            fn get_disjoint_mut<const N: usize>(&mut self, ks: [&Q; N]) -> [Option<&mut V>; N] {
+                self.get_disjoint_mut(ks)
+            }
+
+            fn remove(&mut self, key: &Q) -> Option<V> {
+                self.remove(key)
+            }
+
+            fn remove_entry(&mut self, key: &Q) -> Option<(K, V)> {
+                self.remove_entry(key)
+            }
+        }
+    };
 }
 
-impl<K, V, Q: ?Sized, S> MapQuery<K, V, Q> for HashMap<K, V, S>
-where
-    K: Eq + Hash,
-    S: BuildHasher,
-    K: Borrow<Q>,
-    Q: Eq + Hash,
-{
-    fn contains_key(&self, key: &Q) -> bool {
-        self.contains_key(key)
-    }
+#[cfg(feature = "hashbrown")]
+for_hash!(hashbrown::hash_map, <K: Hash, V, S: BuildHasher>);
+#[cfg(not(feature = "no_std"))]
+for_hash!(std::collections::hash_map, <K, V>);
 
-    fn get(&self, key: &Q) -> Option<&V> {
-        self.get(key)
-    }
-
-    fn get_mut(&mut self, key: &Q) -> Option<&mut V> {
-        self.get_mut(key)
-    }
-
-    fn get_key_value(&self, key: &Q) -> Option<(&K, &V)> {
-        self.get_key_value(key)
-    }
-
-    fn get_disjoint_mut<const N: usize>(&mut self, ks: [&Q; N]) -> [Option<&mut V>; N] {
-        self.get_disjoint_mut(ks)
-    }
-
-    fn remove(&mut self, key: &Q) -> Option<V> {
-        self.remove(key)
-    }
-
-    fn remove_entry(&mut self, key: &Q) -> Option<(K, V)> {
-        self.remove_entry(key)
-    }
-}
 
 impl<'a, K, V> OccupiedEntry<'a, K, V> for btree_map::OccupiedEntry<'a, K, V>
 where
@@ -486,18 +498,6 @@ where
         self.remove_entry(key)
     }
 }
-unsafe fn unsafe_get_disjoint_mut<'s, K, V, Q: ?Sized, S: MapQuery<K, V, Q>, const N: usize>(s: &'s mut S, ks: [&Q; N]) -> [Option<&'s mut V>; N] {
-    let mut set = HashSet::<*mut V>::with_capacity(N);
-    ks.map(|k| {
-        let r = unsafe { std::mem::transmute::<&mut S, &mut S>(s) }.get_mut(k);
-        if let Some(r) = r {
-            if set.insert(r) {
-                return Some(r);
-            }
-        }
-        return None;
-    })
-}
 
 pub trait EntryImpl<'a, K, V, Occupied: OccupiedEntry<'a, K, V>, Vacant: VacantEntry<'a, K, V>> {
     fn or_insert(self, default: V) -> &'a mut V;
@@ -568,4 +568,48 @@ impl<'a, K, V, Occupied: OccupiedEntry<'a, K, V>, Vacant: VacantEntry<'a, K, V, 
             Vacant(entry) => entry.insert_entry(value),
         }
     }
+}
+unsafe fn unsafe_get_disjoint_mut<'s, K, V, Q: ?Sized, S: MapQuery<K, V, Q>, const N: usize>(s: &'s mut S, ks: [&Q; N]) -> [Option<&'s mut V>; N] {
+    #[cfg(feature = "hashbrown")]
+    macro_rules! hash_set {
+        ($N: expr) => { hashbrown::HashSet::with_capacity($N) };
+    }
+    #[cfg(all(not(feature = "hashbrown"), not(feature = "no_std")))]
+    macro_rules! hash_set {
+        ($N: expr) => { std::collections::HashSet::with_capacity($N) };
+    }
+    #[cfg(all(not(feature = "hashbrown"), feature = "no_std"))]
+    mod set {
+        use alloc::vec::Vec;
+
+        pub struct HashSet<const N: usize>([Vec<usize>; N]);
+        impl<const N: usize> HashSet<N> {
+            pub fn new() -> Self {
+                Self(core::array::from_fn(|_| Vec::new()))
+            }
+            pub fn insert(&mut self, value: usize) -> bool {
+                let slots = &mut self.0[value % N];
+                if slots.contains(&value) {
+                    false
+                } else {
+                    slots.push(value);
+                    true
+                }
+            }
+        }
+    }
+    #[cfg(all(not(feature = "hashbrown"), feature = "no_std"))]
+    macro_rules! hash_set {
+        ($N: expr) => { set::HashSet::<$N>::new() };
+    }
+    let mut set = hash_set!(N);
+    ks.map(|k| {
+        let r = unsafe { core::mem::transmute::<&mut S, &mut S>(s) }.get_mut(k);
+        if let Some(r) = r {
+            if set.insert(r as *const V as usize) {
+                return Some(r);
+            }
+        }
+        return None;
+    })
 }
